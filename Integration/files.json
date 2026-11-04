@@ -216,18 +216,18 @@
         "action": "copy",
         "source": "Demo/Overlay/Tests/DraftPocketDemo/DraftPocketDemoUITests.swift",
         "target": "Tests/DraftPocketDemo/DraftPocketDemoUITests.swift",
-        "sha256": "23abf4b814550f5e0f3eee528401d2abb7cc8b59a3b4fb619bcb14a30ea278c7"
+        "sha256": "9b117d8cdc23e0763e1fc1e300391f2ba6430b64f9706a19db0ecee0ac3d5f44"
       },
       {
         "action": "copy",
         "source": "Demo/Overlay/submodules/TelegramCore/Sources/DraftPocketDemoBootstrap.swift",
         "target": "submodules/TelegramCore/Sources/DraftPocketDemoBootstrap.swift",
-        "sha256": "f6794f4a6a9fee0c535b863f127c4b1425aed438d54c94d4ddbfe5124f8e9ba4"
+        "sha256": "c0d5fb65f1a391be2e9ffa511961f196f685e423b61473ee39937c4fc366c30c"
       }
     ],
     "patch": {
       "source": "Integration/demo.patch",
-      "sha256": "2352e12822e355b4a53ec7dfb65833c515f194746d01934612377bbe67382c02",
+      "sha256": "b53c847e447e5ce0aabacb913f10de86775630799448b378d735696f59706b28",
       "files": [
         {
           "action": "modify",
@@ -252,6 +252,12 @@
           "target": "submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift",
           "before_sha256": "98f0c9cec725e492c998e3957cbbdf7c26902e0d5edb1ad0b376a043eeafa95c",
           "after_sha256": "ac1b4dfe52deb14c56246226efacefe917a634b2a8f8cfe59d04d65b23f0a648"
+        },
+        {
+          "action": "modify",
+          "target": "submodules/TelegramUI/Sources/ChatController.swift",
+          "before_sha256": "b8678a1b505a149d416956e04008ef0e9a994b6fbe4a195edef7b6c3f1a89a49",
+          "after_sha256": "56569b4afd6844d29fa1c136b7e876efd76a2c90c2dbf12c21a7ccbe6057249d"
         }
       ]
     },

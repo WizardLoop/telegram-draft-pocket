@@ -222,3 +222,16 @@ diff --git a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Source
          self.sendActionButtons.sendContainerNode.alpha = 0.0
          self.sendActionButtons.updateAccessibility()
          self.mediaActionButtons.updateAccessibility()
+diff --git a/submodules/TelegramUI/Sources/ChatController.swift b/submodules/TelegramUI/Sources/ChatController.swift
+--- a/submodules/TelegramUI/Sources/ChatController.swift
++++ b/submodules/TelegramUI/Sources/ChatController.swift
+@@ -8553,6 +8553,9 @@
+             f,
+             completion: completion
+         )
++        if DraftPocketDemo.isEnabled {
++            DraftPocketDemo.observeComposer(account: self.context.account, peerId: self.chatLocation.peerId, content: self.presentationInterfaceState.interfaceState.composeInputState.content)
++        }
+     }
+     
+     func updateItemNodesSelectionStates(animated: Bool) {

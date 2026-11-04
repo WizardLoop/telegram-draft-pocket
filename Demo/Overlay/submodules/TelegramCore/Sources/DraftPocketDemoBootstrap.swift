@@ -52,6 +52,29 @@ public enum DraftPocketDemo {
         return CommandLine.arguments.contains("--draft-pocket-demo-secondary") ? self.secondaryPeerId : self.conversationPeerId
     }
 
+    private static var incomingQuestionScheduled = Set<String>()
+
+    /// Fixture-only incoming history. Real typing is observed; composer/Pocket state is never edited.
+    public static func observeComposer(account: Account, peerId: PeerId?, content: ChatInputContent) {
+        #if DEBUG && targetEnvironment(simulator)
+        guard self.isEnabled, Thread.isMainThread, peerId == self.conversationPeerId,
+              URL(fileURLWithPath: account.basePath).pathComponents.contains(self.directoryName),
+              content.plainText.hasPrefix("I’ve reviewed the new sticker pack."),
+              content.plainText.contains("I’ll send the detailed notes shortly."),
+              self.incomingQuestionScheduled.insert(account.basePath).inserted else { return }
+        let _ = (account.postbox.transaction { transaction -> Void in
+            let id = MessageId(peerId: self.conversationPeerId, namespace: Namespaces.Message.Cloud, id: 4)
+            guard transaction.getMessage(id) == nil else { return }
+            let message = StoreMessage(id: id, customStableId: nil, globallyUniqueId: nil,
+                groupingKey: nil, threadId: nil, timestamp: Int32(Date().timeIntervalSince1970),
+                flags: [.Incoming], tags: [], globalTags: [], localTags: [], forwardInfo: nil,
+                authorId: self.conversationPeerId, text: "Quick question — can we publish at 18:00?",
+                attributes: [], media: [])
+            let _ = transaction.addMessages([message], location: .UpperHistoryBlock)
+        }).startStandalone()
+        #endif
+    }
+
     public static func signIn(accountManager: AccountManager<TelegramAccountManagerTypes>, account: UnauthorizedAccount) -> Signal<Void, NoError> {
         #if DEBUG && targetEnvironment(simulator)
         // Guard the account itself as well as the launch flag. A normal account must never reach this write.
@@ -101,8 +124,7 @@ public enum DraftPocketDemo {
         self.seedConversation(transaction: transaction, peerId: self.conversationPeerId, messages: [
             ("Offline demo — fictional messages. Nothing is delivered to a Telegram account.", true),
             ("Could you review the new sticker pack?", true),
-            ("I’m taking a look at the motion now.", false),
-            ("Quick question — can we publish at 18:00?", true)
+            ("I’m taking a look at the motion now.", false)
         ])
         self.seedConversation(transaction: transaction, peerId: self.secondaryPeerId, messages: [
             ("This separate fictional chat is used to check draft isolation.", true)

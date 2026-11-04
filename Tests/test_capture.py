@@ -1,10 +1,14 @@
 """Reject plausible-looking recordings that lack real scenario evidence."""
 
 import importlib.util
+import copy
+import hashlib
+import json
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
@@ -17,7 +21,7 @@ class CaptureEvidenceTests(unittest.TestCase):
     def setUp(self):
         self.selection = "DraftPocketDemoUITests/testCaptureProductionStory"
         self.cases = [{"identifier": "DraftPocketDemoUITests/testCaptureProductionStory()", "status": "Success"}]
-        names = ["story_start", "put_aside_start", "put_aside_end", "put_aside_start", "put_aside_end",
+        names = ["story_start", "put_aside_start", "put_aside_end", "incoming_question_visible", "put_aside_start", "put_aside_end",
                  "send_local_start", "send_local_end", "restore_start", "restore_end", "send_local_start", "send_local_end", "story_end"]
         self.events = [{"event": name, "utc": 101 + index} for index, name in enumerate(names)]
 
@@ -80,6 +84,15 @@ class NativeResultTests(unittest.TestCase):
         with self.assertRaises(capture.package.PackageError):
             capture.xcresult_cases(self.root, lambda _: {"summaries": []})
 
+    def test_native_summary_reference_is_validated_and_retained(self):
+        leaf = self.summary["summaries"]["_values"][0]["testableSummaries"]["_values"][0]["tests"]["_values"][0]["subtests"]["_values"][0]
+        leaf["summaryRef"] = {"id": {"_value": "0~screenshot-summary"}}
+        cases = capture.xcresult_cases(self.root, lambda _: self.summary)
+        self.assertEqual(cases[0]["summary_ref"], "0~screenshot-summary")
+        leaf["summaryRef"]["id"]["_value"] = "--wrong-reference"
+        with self.assertRaises(capture.package.PackageError):
+            capture.xcresult_cases(self.root, lambda _: self.summary)
+
     def test_native_archive_copy_is_exact(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -122,6 +135,109 @@ class NativeResultTests(unittest.TestCase):
             (outputs / "outputs.zip").write_bytes(b"not a valid archive")
             with self.assertRaisesRegex(capture.package.PackageError, "Ambiguous"):
                 capture.copy_xcresult(outputs, destination)
+
+
+class NamedScreenshotTests(unittest.TestCase):
+    def setUp(self):
+        self.selection = "DraftPocketDemoUITests/testCaptureProductionStory"
+        self.case = {"identifier": self.selection + "()", "status": "Success", "summary_ref": "0~summary"}
+        self.content = b"\x89PNG\r\n\x1a\nexample payload for mocked native exporter"
+        self.attachments = []
+        for name, count in capture.SCREENSHOTS["testCaptureProductionStory"].items():
+            for _ in range(count):
+                self.attachments.append({
+                    "name": {"_value": name}, "uniformTypeIdentifier": {"_value": "public.png"},
+                    "filename": {"_value": "../../never-use-native-filenames.png"},
+                    "payloadRef": {"id": {"_value": f"0~payload-{len(self.attachments)}"}},
+                    "payloadSize": {"_value": str(len(self.content))},
+                    "timestamp": {"_value": "2026-11-05T10:00:00.000+0000"},
+                })
+        self.summary = {"identifier": {"_value": "testCaptureProductionStory()"}, "testStatus": {"_value": "Success"},
+                        "activitySummaries": {"_values": [{"subactivities": {"_values": [
+                            {"attachments": {"_values": self.attachments}}
+                        ]}}]}}
+
+    def test_only_explicit_names_are_selected_and_paths_are_generated(self):
+        self.attachments.append({"name": {"_value": "private diagnostic screenshot"},
+                                 "payloadRef": {"id": {"_value": "0~must-not-export"}}})
+        selected = capture.named_screenshots(self.summary, self.selection)
+        self.assertEqual(len(selected), 4)
+        self.assertEqual(len(set(item["path"] for item in selected)), 4)
+        self.assertTrue(all("/" not in item["path"] and ".." not in item["path"] for item in selected))
+        self.assertNotIn("0~must-not-export", [item["payload_ref"] for item in selected])
+
+    def test_wrong_case_missing_or_duplicate_named_images_rejected(self):
+        variants = []
+        for key, value in (("identifier", "testCaptureProductionStoryFake()"), ("testStatus", "Failure")):
+            summary = copy.deepcopy(self.summary)
+            summary[key]["_value"] = value
+            variants.append(summary)
+        for rows in (self.attachments[:-1], self.attachments + [self.attachments[0]]):
+            summary = copy.deepcopy(self.summary)
+            summary["activitySummaries"] = {"_values": [{"attachments": {"_values": rows}}]}
+            variants.append(summary)
+        for summary in variants:
+            with self.subTest(summary=summary), self.assertRaises(capture.package.PackageError):
+                capture.named_screenshots(summary, self.selection)
+
+    def test_invalid_types_payload_refs_sizes_and_timestamps_rejected(self):
+        for key, value in (("uniformTypeIdentifier", "public.plain-text"), ("payloadSize", "0"),
+                           ("payloadSize", str(33 * 1024 * 1024)), ("payloadSize", 15),
+                           ("timestamp", "2026-11-05T10:00:00"), ("timestamp", "invalid")):
+            summary = copy.deepcopy(self.summary)
+            summary["activitySummaries"]["_values"][0]["subactivities"]["_values"][0]["attachments"]["_values"][0][key] = {"_value": value}
+            with self.subTest(key=key, value=value), self.assertRaises(capture.package.PackageError):
+                capture.named_screenshots(summary, self.selection)
+        self.attachments[0]["payloadRef"]["id"]["_value"] = "--output-path=/outside"
+        with self.assertRaises(capture.package.PackageError):
+            capture.named_screenshots(self.summary, self.selection)
+
+    def export_tool(self, command):
+        if command[0] == "ffprobe":
+            return json.dumps({"streams": [{"codec_type": "video", "codec_name": "png", "nb_read_frames": "1",
+                                            "width": 1206, "height": 2622}]}).encode()
+        self.assertEqual(command[:7], ["xcrun", "xcresulttool", "export", "object", "--legacy", "--type", "file"])
+        Path(command[command.index("--output-path") + 1]).write_bytes(self.content)
+        return b""
+
+    def test_export_preserves_bytes_and_native_identity_without_diagnostics(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            artifacts = Path(temporary)
+            with mock.patch.object(capture.package, "run", side_effect=self.export_tool) as run:
+                capture.export_named_screenshots(Path("test.xcresult"), artifacts, self.case, self.selection, self.summary)
+            self.assertEqual(run.call_count, 8)
+            manifest = json.loads((artifacts / "screenshots/manifest.json").read_text())
+            self.assertEqual(manifest["native_case"], self.selection)
+            self.assertEqual(manifest["summary_ref"], "0~summary")
+            self.assertEqual(len(manifest["screenshots"]), 4)
+            for item in manifest["screenshots"]:
+                self.assertEqual((artifacts / "screenshots" / item["path"]).read_bytes(), self.content)
+                self.assertEqual(item["sha256"], hashlib.sha256(self.content).hexdigest())
+                self.assertEqual((item["width"], item["height"]), (1206, 2622))
+            self.assertEqual(len(list(artifacts.rglob("*"))), 6)
+
+    def test_invalid_export_fails_before_artifact_promotion(self):
+        for invalid in (b"not PNG", b"\x89PNG\r\n\x1a\nwrong length"):
+            def tool(command):
+                Path(command[command.index("--output-path") + 1]).write_bytes(invalid)
+                return b""
+            with self.subTest(payload=invalid), tempfile.TemporaryDirectory() as temporary:
+                artifacts = Path(temporary)
+                with mock.patch.object(capture.package, "run", side_effect=tool), self.assertRaises(capture.package.PackageError):
+                    capture.export_named_screenshots(Path("test.xcresult"), artifacts, self.case, self.selection, self.summary)
+                self.assertEqual(list(artifacts.iterdir()), [])
+
+    def test_non_image_or_multiframe_export_is_not_promoted(self):
+        def tool(command):
+            if command[0] == "ffprobe":
+                return json.dumps({"streams": [{"codec_type": "video", "codec_name": "png", "nb_read_frames": "2",
+                                                "width": 1206, "height": 2622}]}).encode()
+            return self.export_tool(command)
+        with tempfile.TemporaryDirectory() as temporary:
+            artifacts = Path(temporary)
+            with mock.patch.object(capture.package, "run", side_effect=tool), self.assertRaises(capture.package.PackageError):
+                capture.export_named_screenshots(Path("test.xcresult"), artifacts, self.case, self.selection, self.summary)
+            self.assertEqual(list(artifacts.iterdir()), [])
 
 
 if __name__ == "__main__":

@@ -126,6 +126,11 @@ final class DraftPocketDemoUITests: XCTestCase {
         self.type("Remember to review the easing curve.", in: app)
         self.putAside(app)
         self.type(self.longDraft, in: app)
+        let question = app.descendants(matching: .any).matching(NSPredicate(format:
+            "label CONTAINS %@", "Quick question — can we publish at 18:00?")).firstMatch
+        XCTAssertTrue(question.waitForExistence(timeout: 15), "The incoming fixture must arrive after actual draft typing")
+        XCTAssertEqual(self.editor(app).value as? String, self.longDraft)
+        self.event("incoming_question_visible")
         self.boldAllText(app)
         self.snapshot("formatted-composer-before-put-aside", app: app)
         self.putAside(app)
