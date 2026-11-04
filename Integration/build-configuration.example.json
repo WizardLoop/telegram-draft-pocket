@@ -1,0 +1,14 @@
+{
+  "bundle_id": "org.wizardloop.draftpocket",
+  "api_id": "REPLACE_WITH_YOUR_API_ID",
+  "api_hash": "REPLACE_WITH_YOUR_API_HASH",
+  "team_id": "DRAFTLOCAL",
+  "app_center_id": "0",
+  "is_internal_build": "true",
+  "is_appstore_build": "false",
+  "appstore_id": "0",
+  "app_specific_url_scheme": "draftpocket",
+  "premium_iap_product_id": "",
+  "enable_siri": false,
+  "enable_icloud": false
+}

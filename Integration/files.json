@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "base_commit": "279f89e4d4f63f17227bf877dc3d8990f22ecd58",
+  "feature": {
+    "files": [
+      {
+        "action": "copy",
+        "source": "submodules/ChatInterfaceState/Tests/DraftPocketComposerStateTests.swift",
+        "target": "submodules/ChatInterfaceState/Tests/DraftPocketComposerStateTests.swift",
+        "sha256": "5807872e5f8141e40eae190e374e812bbf562e2af5cd851c8e0db19ed2284469"
+      },
+      {
+        "action": "copy",
+        "source": "submodules/TelegramCore/Sources/TelegramEngine/Peers/DraftPocket.swift",
+        "target": "submodules/TelegramCore/Sources/TelegramEngine/Peers/DraftPocket.swift",
+        "sha256": "f1bd916cede9721f2adcba1a7fb5d2b123bc637d50b6a297c1041679f851967e"
+      },
+      {
+        "action": "copy",
+        "source": "submodules/TelegramCore/Tests/DraftPocketTests.swift",
+        "target": "submodules/TelegramCore/Tests/DraftPocketTests.swift",
+        "sha256": "c9428132a7bb7761bb5a726b8264ce054813f9cdfaa18b5dc1f2421f58cebc63"
+      },
+      {
+        "action": "copy",
+        "source": "submodules/TelegramPresentationData/Sources/DraftPocketStrings.swift",
+        "target": "submodules/TelegramPresentationData/Sources/DraftPocketStrings.swift",
+        "sha256": "4530b9294e4aba041ac700139342c07210e23a01c8d5ff09bb0e0c3c12cda65f"
+      },
+      {
+        "action": "copy",
+        "source": "submodules/TelegramUI/Sources/ChatControllerDraftPocket.swift",
+        "target": "submodules/TelegramUI/Sources/ChatControllerDraftPocket.swift",
+        "sha256": "9bd1a1a913625c45acb9a0eec224b4eda66694587e7e8efa717fd42debc849ac"
+      },
+      {
+        "action": "copy",
+        "source": "submodules/TelegramUI/Sources/DraftPocketController.swift",
+        "target": "submodules/TelegramUI/Sources/DraftPocketController.swift",
+        "sha256": "6c630cb327c0aad61dbaaac37d6cbbe5419f996e4c982011779cae7eb0607709"
+      }
+    ],
+    "patch": {
+      "source": "Integration/telegram-ios.patch",
+      "sha256": "908ef70511b06d31e93ee1cb34a7a63600824abd299988b49016d8837304e8f9",
+      "files": [
+        {
+          "action": "modify",
+          "target": "Telegram/Telegram-iOS/en.lproj/Localizable.strings",
+          "before_sha256": "9d444bd06b7bca48b166fa17d63ea1e743aef2280a8c7ac8377ee0f7640208f2",
+          "after_sha256": "d705bdaddd73a3a0ad372b2f1b7be475b71077c3290bc4ded338fd57a7fc364e"
+        },
+        {
+          "action": "modify",
+          "target": "build-system/Make/Make.py",
+          "before_sha256": "38fa0a759195cbe4fba872b837de076dab57f28150ff80ae5d11d048102b974e",
+          "after_sha256": "465efb1d9c76b746c73bc2874ba145ab719e42627c8e8d4926311010f8c56074"
+        },
+        {
+          "action": "modify",
+          "target": "submodules/AccountContext/Sources/ChatController.swift",
+          "before_sha256": "670cee104398e29bcd21c4f7e3bf27ee49ff0e2eb6feea970427a2257ab89804",
+          "after_sha256": "831c0dc62d22d53ff32740b73c022f1d229a2f8e7d03b5bb8d69d3642d482859"
+        },
+        {
+          "action": "modify",
+          "target": "submodules/ChatInterfaceState/BUILD",
+          "before_sha256": "6dc17ffc472da5f74e7f91d363e53bc2ee0bf15e44802664a4e56a73de652926",
+          "after_sha256": "23c063dd7ebf1ddbe93e1391800c4da1de4242dbb294ce637fc13a723e844fda"
+        },
+        {
+          "action": "modify",
+          "target": "submodules/ChatInterfaceState/Sources/ChatInterfaceState.swift",
+          "before_sha256": "3797ecbc78fd2994f118272d7d93a49400ee4ade499dcc4700d28052ca55ec2a",
+          "after_sha256": "1c779dbe85ea387151cb1bdea4f6a784c328a2cdcbc748d4ba9b1ba638bc6426"
+        },
+        {
+          "action": "modify",
+          "target": "submodules/TelegramCore/BUILD",
+          "before_sha256": "0dd6ff1ecc057e958b997104c74ae3010954964a80a956c726477a02be0ff14a",
+          "after_sha256": "618a10eeab39afa32c4b408607581f93a2e832230fe4ba397b685b3be1c8b940"
+        },
+        {
+          "action": "modify",
+          "target": "submodules/TelegramCore/Sources/ChatInputContent/ChatInputContentCustomEmoji.swift",
+          "before_sha256": "9e73e0390c79f3a75b395f8e49a2a7e2b1d30acfdc8071eed906001abcf368be",
+          "after_sha256": "bbb62b2c54028ab774d55c6c8c891c23d694e38d5b37e17c079d531452e4f2ef"
+        },
+        {
+          "action": "modify",
+          "target": "submodules/TelegramCore/Sources/SyncCore/SyncCore_Namespaces.swift",
+          "before_sha256": "1749a11eb0ebf54adff01da5a5eb12590ef98472cf5f93eea78b857b8519d5e8",
+          "after_sha256": "dcc6d6096ddc9675ff237df9751ebd9ea06fa6878127e1672b35006b98904b89"
+        },
+        {
+          "action": "modify",
+          "target": "submodules/TelegramCore/Sources/TelegramEngine/Peers/TelegramEnginePeers.swift",
+          "before_sha256": "97216ee4418fee7c7bec841fb744917f485c39142bc3ca6273a29ed51cb1892a",
+          "after_sha256": "0fb2829b64c34c8bed8e57db15a90bf05c5a5abde2c28c7c83df1efe8e314bc1"
+        },
+        {
+          "action": "modify",
+          "target": "submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift",
+          "before_sha256": "5ea7772bf0888bc71f90b79ad5df90187e9bcd22157dc69c80d02f1f1123ce12",
+          "after_sha256": "98f0c9cec725e492c998e3957cbbdf7c26902e0d5edb1ad0b376a043eeafa95c"
+        },
+        {
+          "action": "modify",
+          "target": "submodules/TelegramUI/Sources/ChatController.swift",
+          "before_sha256": "76746e5dc6bf50b7760e0ffd71eb023874d914dd502347be94daacbb50e0f7a9",
+          "after_sha256": "b8678a1b505a149d416956e04008ef0e9a994b6fbe4a195edef7b6c3f1a89a49"
+        },
+        {
+          "action": "modify",
+          "target": "submodules/TelegramUI/Sources/ChatControllerNode.swift",
+          "before_sha256": "296f809989b39fe4705a1c450baf00078cd8508369ea0d6b5ec5c17064bc10a1",
+          "after_sha256": "a2e06d580de9776dc2d0fc097716de6eb176b9c4f04a2e15e47983a8fb10105d"
+        }
+      ]
+    }
+  },
+  "demo": {
+    "available": false,
+    "reason": "No isolated full-client offline bootstrap has been implemented or validated."
+  }
+}

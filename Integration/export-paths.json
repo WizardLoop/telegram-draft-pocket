@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "feature_new": [
+    "submodules/ChatInterfaceState/Tests/DraftPocketComposerStateTests.swift",
+    "submodules/TelegramCore/Sources/TelegramEngine/Peers/DraftPocket.swift",
+    "submodules/TelegramCore/Tests/DraftPocketTests.swift",
+    "submodules/TelegramPresentationData/Sources/DraftPocketStrings.swift",
+    "submodules/TelegramUI/Sources/ChatControllerDraftPocket.swift",
+    "submodules/TelegramUI/Sources/DraftPocketController.swift"
+  ],
+  "feature_modified": [
+    "Telegram/Telegram-iOS/en.lproj/Localizable.strings",
+    "build-system/Make/Make.py",
+    "submodules/AccountContext/Sources/ChatController.swift",
+    "submodules/ChatInterfaceState/BUILD",
+    "submodules/ChatInterfaceState/Sources/ChatInterfaceState.swift",
+    "submodules/TelegramCore/BUILD",
+    "submodules/TelegramCore/Sources/ChatInputContent/ChatInputContentCustomEmoji.swift",
+    "submodules/TelegramCore/Sources/SyncCore/SyncCore_Namespaces.swift",
+    "submodules/TelegramCore/Sources/TelegramEngine/Peers/TelegramEnginePeers.swift",
+    "submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift",
+    "submodules/TelegramUI/Sources/ChatController.swift",
+    "submodules/TelegramUI/Sources/ChatControllerNode.swift"
+  ]
+}

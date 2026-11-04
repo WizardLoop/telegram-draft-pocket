@@ -1,0 +1,37 @@
+name: Package integrity and reconstruction (not iOS)
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      included_usage_verified:
+        description: 'I verified this run and its artifacts fit existing free/included Actions usage'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  packaging:
+    if: ${{ github.event.repository.private == false && (github.event_name == 'pull_request' || inputs.included_usage_verified) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Packaging regression tests and manifest hashes
+        run: bash scripts/test.sh
+      - name: Fetch exactly pinned upstream into a separate checkout
+        run: bash scripts/bootstrap-telegram.sh "$RUNNER_TEMP/telegram-ios"
+      - name: Reconstruct from the package and verify every changed file
+        run: bash scripts/check-integration.sh "$RUNNER_TEMP/telegram-ios"
+      - name: Verify repeat application detects the complete state
+        run: bash scripts/apply-feature.sh "$RUNNER_TEMP/telegram-ios"
+      - name: Declare validation boundary
+        run: echo 'Packaging only. This job does not compile Swift, build iOS, run native feature tests, or validate UI/capture.'
