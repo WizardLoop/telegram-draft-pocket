@@ -16,6 +16,8 @@ Standard hosted runners are free for public repositories according to the linked
 
 The macOS workflow is not triggered automatically by a push or ordinary PR update. A maintainer can explicitly apply `run-simulator` to a Draft PR whose head belongs to this same public repository. The `pull_request: labeled` event tests GitHub's PR merge ref, as described in [GitHub's event documentation](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows). Evidence records the feature head SHA separately from the tested merge SHA.
 
+Concurrency is scoped to the ref and feature commit. Repeated requests for the same revision serialize, while a deliberately requested newer revision can run alongside the preceding attempt without cancelling its evidence. Avoid queueing redundant attempts; cancel a superseded pending request before replacing it.
+
 `workflow_dispatch` is also defined, with a default-false usage acknowledgement. GitHub normally requires the workflow to exist on the default branch before manual dispatch is available. The label route allows the first reviewed attempt while implementation stays on `feature/draft-pocket`; do not push implementation to `main` or merge the PR just to expose the Run workflow button.
 
 The separate `verify.yml` runs packaging regression tests, feature-only clean reconstruction, feature-plus-demo clean reconstruction, exact repeated application, and demo application to a fully verified feature state. It uses actual pinned upstream checkouts for the integration checks. It is explicitly named **not iOS**. A green packaging job proves neither compilation nor behavior in Telegram.

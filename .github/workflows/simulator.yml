@@ -17,7 +17,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: draft-pocket-simulator-${{ github.ref }}
+  # Keep evidence for an older build while a new source revision is tested.
+  # Requests for the same revision still serialize.
+  group: draft-pocket-simulator-${{ github.ref }}-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: false
 
 jobs:
