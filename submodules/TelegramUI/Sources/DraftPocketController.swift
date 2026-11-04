@@ -20,16 +20,19 @@ final class DraftPocketController: ViewController, UITableViewDataSource, UITabl
     private let doneButton = UIButton(type: .system)
     private var items: [DraftPocketItem] = []
     private var deletedItems: [DraftPocketItem] = []
+    private var pendingSends: [DraftPocketSendRecovery] = []
     private var lastLayout: ContainerViewLayout?
     private var canPutAside = false
     private var busy = false
     private var storageError: DraftPocketError?
+    private var mediaRecoveryUnavailable = false
 
     var putAside: (() -> Void)?
     var restore: ((String) -> Void)?
     var deleteDraft: ((String) -> Void)?
     var undoDeleted: ((String) -> Void)?
     var finalizeDeleted: ((String) -> Void)?
+    var recoverSend: ((String) -> Void)?
     var closed: (() -> Void)?
 
     init(context: AccountContext) {
@@ -78,16 +81,19 @@ final class DraftPocketController: ViewController, UITableViewDataSource, UITabl
         self.updateAppearance()
     }
 
-    func update(items: [DraftPocketItem], deletedItems: [DraftPocketItem], error: DraftPocketError?, canPutAside: Bool, busy: Bool) {
+    func update(items: [DraftPocketItem], deletedItems: [DraftPocketItem], pendingSends: [DraftPocketSendRecovery], error: DraftPocketError?, canPutAside: Bool, busy: Bool, mediaRecoveryUnavailable: Bool = false) {
         self.items = items
         self.deletedItems = deletedItems
+        self.pendingSends = pendingSends
         self.storageError = error
+        self.mediaRecoveryUnavailable = mediaRecoveryUnavailable
         self.canPutAside = canPutAside
         self.busy = busy
         guard self.isNodeLoaded else { return }
-        self.emptyLabel.isHidden = error == nil && !(items.isEmpty && deletedItems.isEmpty)
+        self.emptyLabel.isHidden = error == nil && !(items.isEmpty && deletedItems.isEmpty && pendingSends.isEmpty)
         let strings = DraftPocketStrings(self.presentationData.strings)
         self.emptyLabel.text = error == nil ? strings.empty : strings.storageUnavailable
+        self.detailLabel.text = strings.localOnly + (mediaRecoveryUnavailable ? "\n" + strings.mediaRecoveryUnavailable : "")
         self.putAsideButton.isEnabled = canPutAside && !busy && error == nil
         self.tableView.isUserInteractionEnabled = !busy
         self.tableView.reloadData()
@@ -111,7 +117,7 @@ final class DraftPocketController: ViewController, UITableViewDataSource, UITabl
         self.emptyLabel.text = strings.empty
         self.putAsideButton.setTitle(strings.putAside, for: .normal)
         self.doneButton.setTitle(self.presentationData.strings.Common_Done, for: .normal)
-        self.update(items: self.items, deletedItems: self.deletedItems, error: self.storageError, canPutAside: self.canPutAside, busy: self.busy)
+        self.update(items: self.items, deletedItems: self.deletedItems, pendingSends: self.pendingSends, error: self.storageError, canPutAside: self.canPutAside, busy: self.busy, mediaRecoveryUnavailable: self.mediaRecoveryUnavailable)
         if let layout = self.lastLayout { self.containerLayoutUpdated(layout, transition: .immediate) }
     }
 
@@ -144,28 +150,42 @@ final class DraftPocketController: ViewController, UITableViewDataSource, UITabl
         self.closed?()
     }
 
-    func numberOfSections(in tableView: UITableView) -> Int { self.deletedItems.isEmpty ? 1 : 2 }
-    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { section == 0 ? self.items.count : self.deletedItems.count }
+    func numberOfSections(in tableView: UITableView) -> Int { self.pendingSends.isEmpty ? (self.deletedItems.isEmpty ? 1 : 2) : 3 }
+    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { section == 0 ? self.items.count : (section == 1 ? self.deletedItems.count : self.pendingSends.count) }
     func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        return section == 1 ? DraftPocketStrings(self.presentationData.strings).pendingDelete : nil
+        let strings = DraftPocketStrings(self.presentationData.strings)
+        if section == 2 { return strings.interruptedSends }
+        return section == 1 && !self.deletedItems.isEmpty ? strings.pendingDelete : nil
     }
     private func item(at indexPath: IndexPath) -> DraftPocketItem {
         return indexPath.section == 0 ? self.items[indexPath.row] : self.deletedItems[indexPath.row]
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let item = self.item(at: indexPath)
-        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
         let strings = DraftPocketStrings(self.presentationData.strings)
-        let actionTitle = indexPath.section == 0 ? strings.restore : strings.undoDelete
-        let preview = item.snapshot.content.plainText
+        let snapshot: DraftPocketSnapshot
+        let id: String
+        let actionTitle: String
+        if indexPath.section == 2 {
+            let recovery = self.pendingSends[indexPath.row]
+            snapshot = recovery.snapshot
+            id = recovery.id
+            actionTitle = strings.recoverSend
+        } else {
+            let item = self.item(at: indexPath)
+            snapshot = item.snapshot
+            id = item.id
+            actionTitle = indexPath.section == 0 ? strings.restore : strings.undoDelete
+        }
+        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+        let preview = snapshot.content.plainText
         cell.textLabel?.text = preview.isEmpty ? strings.structured : String(preview.prefix(220))
         cell.textLabel?.font = UIFont.preferredFont(forTextStyle: .body)
         cell.textLabel?.numberOfLines = 4
         cell.textLabel?.adjustsFontForContentSizeCategory = true
         var details: [String] = []
-        if let state = try? item.snapshot.interfaceState(), state.synchronizeableInputState?.replySubject != nil { details.append(strings.reply) }
-        if draftPocketContainsMedia(item.snapshot.content) { details.append(strings.media) }
+        if let state = try? snapshot.interfaceState(), state.synchronizeableInputState?.replySubject != nil { details.append(strings.reply) }
+        if draftPocketContainsMedia(snapshot.content) { details.append(strings.media) }
         cell.detailTextLabel?.text = details.isEmpty ? actionTitle : details.joined(separator: " · ")
         cell.detailTextLabel?.font = UIFont.preferredFont(forTextStyle: .footnote)
         cell.detailTextLabel?.adjustsFontForContentSizeCategory = true
@@ -174,23 +194,31 @@ final class DraftPocketController: ViewController, UITableViewDataSource, UITabl
         cell.backgroundColor = self.presentationData.theme.list.itemBlocksBackgroundColor
         cell.accessoryType = .disclosureIndicator
         cell.accessibilityTraits = [.button]
-        cell.accessibilityIdentifier = indexPath.section == 0 ? "DraftPocket.Restore.\(item.id)" : "DraftPocket.UndoDelete.\(item.id)"
+        cell.accessibilityIdentifier = indexPath.section == 0 ? "DraftPocket.Restore.\(id)" : (indexPath.section == 1 ? "DraftPocket.UndoDelete.\(id)" : "DraftPocket.RecoverSend.\(id)")
         cell.accessibilityHint = actionTitle
-        cell.accessibilityCustomActions = [UIAccessibilityCustomAction(name: strings.delete, actionHandler: { [weak self] _ in
-            if indexPath.section == 0 { self?.deleteDraft?(item.id) } else { self?.finalizeDeleted?(item.id) }
-            return true
-        })]
+        if indexPath.section != 2 {
+            cell.accessibilityCustomActions = [UIAccessibilityCustomAction(name: strings.delete, actionHandler: { [weak self] _ in
+                if indexPath.section == 0 { self?.deleteDraft?(id) } else { self?.finalizeDeleted?(id) }
+                return true
+            })]
+        }
         return cell
     }
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
         guard !self.busy else { return }
+        if indexPath.section == 2 {
+            self.recoverSend?(self.pendingSends[indexPath.row].id)
+            return
+        }
         let id = self.item(at: indexPath).id
         if indexPath.section == 0 { self.restore?(id) } else { self.undoDeleted?(id) }
     }
 
     func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        // Recovery remains durable until a real enqueue or explicit recovery to a card.
+        guard indexPath.section != 2 else { return nil }
         let id = self.item(at: indexPath).id
         let action = UIContextualAction(style: .destructive, title: DraftPocketStrings(self.presentationData.strings).delete) { [weak self] _, _, done in
             guard let self, !self.busy else { done(false); return }

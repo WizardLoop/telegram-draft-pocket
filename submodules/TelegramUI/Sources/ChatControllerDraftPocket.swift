@@ -48,8 +48,8 @@ extension ChatControllerImpl {
     }
 
     private func updateDraftPocketPresentation() {
-        self.chatDisplayNode.textInputPanelNode?.draftPocketCount = self.draftPocketView?.items.count ?? 0
-        self.draftPocketController?.update(items: self.draftPocketView?.items ?? [], deletedItems: self.draftPocketView?.deletedItems ?? [], error: self.draftPocketView?.error, canPutAside: self.draftPocketSupported && self.draftPocketHasDraft, busy: self.draftPocketOperationInProgress || self.draftPocketView == nil)
+        self.chatDisplayNode.textInputPanelNode?.draftPocketCount = (self.draftPocketView?.items.count ?? 0) + (self.draftPocketView?.pendingSends.count ?? 0)
+        self.draftPocketController?.update(items: self.draftPocketView?.items ?? [], deletedItems: self.draftPocketView?.deletedItems ?? [], pendingSends: self.draftPocketView?.pendingSends ?? [], error: self.draftPocketView?.error, canPutAside: self.draftPocketSupported && self.draftPocketHasDraft, busy: self.draftPocketOperationInProgress || self.draftPocketView == nil, mediaRecoveryUnavailable: self.draftPocketView?.mediaRecoveryUnavailable ?? false)
     }
 
     func openDraftPocket() {
@@ -74,6 +74,7 @@ extension ChatControllerImpl {
         controller.deleteDraft = { [weak self] id in self?.deleteDraftPocketItem(id) }
         controller.undoDeleted = { [weak self] id in self?.mutateDraftPocket(.undoDelete(id: id)) {} }
         controller.finalizeDeleted = { [weak self] id in self?.mutateDraftPocket(.finalizeDelete(id: id)) {} }
+        controller.recoverSend = { [weak self] id in self?.recoverDraftPocketSend(id) }
         controller.closed = { [weak self, weak controller] in
             guard let self, self.draftPocketController === controller else { return }
             self.draftPocketController = nil
@@ -235,6 +236,26 @@ extension ChatControllerImpl {
                 } else {
                     animateTransfer()
                 }
+            }
+            self.updateDraftPocketPresentation()
+        })
+    }
+
+    private func recoverDraftPocketSend(_ id: String) {
+        guard !self.draftPocketOperationInProgress, let view = self.draftPocketView,
+              view.error == nil, view.pendingSends.contains(where: { $0.id == id }),
+              let peerId = self.chatLocation.peerId else { return }
+        let threadId = self.chatLocation.threadId
+        self.draftPocketOperationInProgress = true
+        self.updateDraftPocketPresentation()
+        let _ = (self.context.engine.peers.recoverDraftPocketSend(operationId: id, expectedRevision: view.revision)
+        |> deliverOnMainQueue).startStandalone(next: { [weak self] result in
+            guard let self else { return }
+            self.draftPocketOperationInProgress = false
+            guard self.chatLocation.peerId == peerId, self.chatLocation.threadId == threadId else { return }
+            switch result {
+            case let .success(view): self.draftPocketView = view
+            case let .failure(error): self.draftPocketReport(error)
             }
             self.updateDraftPocketPresentation()
         })

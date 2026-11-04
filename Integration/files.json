@@ -17,9 +17,51 @@
       },
       {
         "action": "copy",
+        "source": "submodules/Postbox/Sources/MediaBoxResourceRetention.swift",
+        "target": "submodules/Postbox/Sources/MediaBoxResourceRetention.swift",
+        "sha256": "055cc548f0a485838a9e1c3887b3cf222844cf9e32c0f44aa58347145f241635"
+      },
+      {
+        "action": "copy",
+        "source": "submodules/Postbox/Tests/MediaBoxDraftRetentionTests.swift",
+        "target": "submodules/Postbox/Tests/MediaBoxDraftRetentionTests.swift",
+        "sha256": "77b06a575f25759fa86e1b0be24e0a0d8fffce81374a40ccd245c8d6b07e2eee"
+      },
+      {
+        "action": "copy",
+        "source": "submodules/TelegramCore/Sources/SyncCore/SyncCore_DraftPocketSendRetentionAttribute.swift",
+        "target": "submodules/TelegramCore/Sources/SyncCore/SyncCore_DraftPocketSendRetentionAttribute.swift",
+        "sha256": "39663d753a90e238c741dde88a0e46d897d857114c1b241335ecfe5443f82723"
+      },
+      {
+        "action": "copy",
         "source": "submodules/TelegramCore/Sources/TelegramEngine/Peers/DraftPocket.swift",
         "target": "submodules/TelegramCore/Sources/TelegramEngine/Peers/DraftPocket.swift",
-        "sha256": "1d78c4a573a73574f65aeaab426612f4af06fd26fb2c8bd7ff3ccd2a5a2055dc"
+        "sha256": "c487e9782ecbc23c4fc2e181970ba146a7c5c001d8400b2d628a41f3264f5c4c"
+      },
+      {
+        "action": "copy",
+        "source": "submodules/TelegramCore/Sources/TelegramEngine/Peers/DraftPocketActiveState.swift",
+        "target": "submodules/TelegramCore/Sources/TelegramEngine/Peers/DraftPocketActiveState.swift",
+        "sha256": "c43be991081c350033a97ffdb6293dc2db52ffed9bbf1ba43380366c6f75276b"
+      },
+      {
+        "action": "copy",
+        "source": "submodules/TelegramCore/Sources/TelegramEngine/Peers/DraftPocketMediaOwnership.swift",
+        "target": "submodules/TelegramCore/Sources/TelegramEngine/Peers/DraftPocketMediaOwnership.swift",
+        "sha256": "b422c607efc6fa5fcf3af4b703a6d9b23a44f44a537d1ed9f1d53997ca92a018"
+      },
+      {
+        "action": "copy",
+        "source": "submodules/TelegramCore/Sources/TelegramEngine/Peers/DraftPocketPreparedSend.swift",
+        "target": "submodules/TelegramCore/Sources/TelegramEngine/Peers/DraftPocketPreparedSend.swift",
+        "sha256": "53a7f76b7435105e52cf9899955eb72797ac4c94d244828873ff6e37e844408d"
+      },
+      {
+        "action": "copy",
+        "source": "submodules/TelegramCore/Tests/DraftPocketMediaLifecycleTests.swift",
+        "target": "submodules/TelegramCore/Tests/DraftPocketMediaLifecycleTests.swift",
+        "sha256": "46165db30760f99e2eeeb71abefd0a03a65c18e6c541a6cdad91c27874b7aeeb"
       },
       {
         "action": "copy",
@@ -31,7 +73,7 @@
         "action": "copy",
         "source": "submodules/TelegramPresentationData/Sources/DraftPocketStrings.swift",
         "target": "submodules/TelegramPresentationData/Sources/DraftPocketStrings.swift",
-        "sha256": "4530b9294e4aba041ac700139342c07210e23a01c8d5ff09bb0e0c3c12cda65f"
+        "sha256": "10024f1434d8212aa6f4a2a8428d6eddc6b5a706ad4294286b9c1f9774765f57"
       },
       {
         "action": "copy",
@@ -67,24 +109,24 @@
         "action": "copy",
         "source": "submodules/TelegramUI/Sources/ChatControllerDraftPocket.swift",
         "target": "submodules/TelegramUI/Sources/ChatControllerDraftPocket.swift",
-        "sha256": "18463ffe875583a82dc772f8046a47ff95d9fa1672609a27b6723cce523026a5"
+        "sha256": "475cbf680a4879e9bcfc7fa6ffcd548faeda6ebf80e359a5e10084ce739983a3"
       },
       {
         "action": "copy",
         "source": "submodules/TelegramUI/Sources/DraftPocketController.swift",
         "target": "submodules/TelegramUI/Sources/DraftPocketController.swift",
-        "sha256": "6c630cb327c0aad61dbaaac37d6cbbe5419f996e4c982011779cae7eb0607709"
+        "sha256": "cdcd2f98ab95218072b6f81ca74a05bb262f38a7d08085e0e4cc86e2feb3d609"
       }
     ],
     "patch": {
       "source": "Integration/telegram-ios.patch",
-      "sha256": "f4094580819e55fbbccbe112fe8b72de47c5e8d6b13f71414346ffec6d9fa929",
+      "sha256": "f281c69df9467dbe43f8cdee79632daacd068b4f3d50f5b5167a4213da65945f",
       "files": [
         {
           "action": "modify",
           "target": "Telegram/Telegram-iOS/en.lproj/Localizable.strings",
           "before_sha256": "9d444bd06b7bca48b166fa17d63ea1e743aef2280a8c7ac8377ee0f7640208f2",
-          "after_sha256": "d705bdaddd73a3a0ad372b2f1b7be475b71077c3290bc4ded338fd57a7fc364e"
+          "after_sha256": "29b77cbb571bcfa447745f947afd2cb658481fcd88fa1c91943baa9954771151"
         },
         {
           "action": "modify",
@@ -114,13 +156,43 @@
           "action": "modify",
           "target": "submodules/ChatInterfaceState/Sources/ChatInterfaceState.swift",
           "before_sha256": "3797ecbc78fd2994f118272d7d93a49400ee4ade499dcc4700d28052ca55ec2a",
-          "after_sha256": "1c779dbe85ea387151cb1bdea4f6a784c328a2cdcbc748d4ba9b1ba638bc6426"
+          "after_sha256": "1c539fd45831cfb36da2d800cf402a858fbec0e90bee77ab941ab7b015c1ae65"
+        },
+        {
+          "action": "modify",
+          "target": "submodules/Postbox/BUILD",
+          "before_sha256": "fb7297fbdeba14b0cda6d6ee821571d5b89c3a956ce739d5bbaf81a8086b76ae",
+          "after_sha256": "9be31394fdc323359701fc50ea726e9f4c3dbf84b497dcbf40f89e50f799b97c"
+        },
+        {
+          "action": "modify",
+          "target": "submodules/Postbox/Sources/MediaBox.swift",
+          "before_sha256": "67fec306a9828dca4015bc20ee9bfa26eeb0b19efa5506fa34df5924ec24e27b",
+          "after_sha256": "7161dbecfc0cce8f58efc3ed40c91db7788ff374f6131bc6a97f54d59ce62017"
+        },
+        {
+          "action": "modify",
+          "target": "submodules/Postbox/Sources/TimeBasedCleanup.swift",
+          "before_sha256": "578b98a3015e0948860bd956af71ed007668e6b787bd2d0f827821d48c1753c1",
+          "after_sha256": "df84bac3721d4d5e568ac4d43b3b286f7e3fd81b532482ca806e035cf38b76ea"
         },
         {
           "action": "modify",
           "target": "submodules/TelegramCore/BUILD",
           "before_sha256": "0dd6ff1ecc057e958b997104c74ae3010954964a80a956c726477a02be0ff14a",
-          "after_sha256": "618a10eeab39afa32c4b408607581f93a2e832230fe4ba397b685b3be1c8b940"
+          "after_sha256": "543af989b7793c4f60633601eb05800981c8bd7d3659460664304a18dc996947"
+        },
+        {
+          "action": "modify",
+          "target": "submodules/TelegramCore/Sources/Account/Account.swift",
+          "before_sha256": "e1327578dfc5d0835de7bd721b024239b85fb73497bcb037358570152d2b1a7c",
+          "after_sha256": "c61cd0f92832a6fbce488ebc4b09343fcefedd9e8eee51ee6e9de230b6eae59f"
+        },
+        {
+          "action": "modify",
+          "target": "submodules/TelegramCore/Sources/Account/AccountManager.swift",
+          "before_sha256": "fd4cda1f16a63b64f7ab524fe138dcf9665149db41497ee8da3218469cdc99e1",
+          "after_sha256": "f23cacb2b8dff44364624937e167a9dfb207f2bc0c6e6d66b02d95a7387b0bca"
         },
         {
           "action": "modify",
@@ -136,15 +208,21 @@
         },
         {
           "action": "modify",
+          "target": "submodules/TelegramCore/Sources/PendingMessages/EnqueueMessage.swift",
+          "before_sha256": "c27d8304d1f8cf6cbda16a9044ecb4e958a8886ed7575d115ab8b73c65acd9f5",
+          "after_sha256": "c5ca76202261e3f82c82dfc186495f9ecf6e6689ea09424ca9664ed7fd99b694"
+        },
+        {
+          "action": "modify",
           "target": "submodules/TelegramCore/Sources/SyncCore/SyncCore_Namespaces.swift",
           "before_sha256": "1749a11eb0ebf54adff01da5a5eb12590ef98472cf5f93eea78b857b8519d5e8",
-          "after_sha256": "dcc6d6096ddc9675ff237df9751ebd9ea06fa6878127e1672b35006b98904b89"
+          "after_sha256": "5872831f8405fbcf208500bba971a9394c4fac2768be41f63a822d295e3fc467"
         },
         {
           "action": "modify",
           "target": "submodules/TelegramCore/Sources/TelegramEngine/Peers/TelegramEnginePeers.swift",
           "before_sha256": "97216ee4418fee7c7bec841fb744917f485c39142bc3ca6273a29ed51cb1892a",
-          "after_sha256": "0fb2829b64c34c8bed8e57db15a90bf05c5a5abde2c28c7c83df1efe8e314bc1"
+          "after_sha256": "abfedb9fe9f6442b40d72b5567aab7d9d289a2576b73b657ddcd1cab6c974a86"
         },
         {
           "action": "modify",
@@ -198,7 +276,7 @@
           "action": "modify",
           "target": "submodules/TelegramUI/Sources/ChatControllerNode.swift",
           "before_sha256": "296f809989b39fe4705a1c450baf00078cd8508369ea0d6b5ec5c17064bc10a1",
-          "after_sha256": "a2e06d580de9776dc2d0fc097716de6eb176b9c4f04a2e15e47983a8fb10105d"
+          "after_sha256": "cbf4208730cd678833995b44e700f64d2373fa929a497cce050c537fc10d5100"
         }
       ]
     }

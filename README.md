@@ -2,7 +2,7 @@
 
 Put an unfinished Telegram iOS message aside, answer a quick question, and return to the draft.
 
-**Implementation draft.** No verified iOS build or real demo recording is available yet. The source is on [`feature/draft-pocket`](https://github.com/WizardLoop/telegram-draft-pocket/tree/feature/draft-pocket) in [Draft PR #1](https://github.com/WizardLoop/telegram-draft-pocket/pull/1), pending review into `main`.
+**Implementation draft.** An earlier integration built successfully on macOS and passed its two native targets. The expanded package and real demo recording still need native validation. The source is on [`feature/draft-pocket`](https://github.com/WizardLoop/telegram-draft-pocket/tree/feature/draft-pocket) in [Draft PR #1](https://github.com/WizardLoop/telegram-draft-pocket/pull/1), pending review into `main`.
 
 ## Demo
 
@@ -18,8 +18,9 @@ You are writing a long formatted message when a quick question arrives. Open Dra
 - Atomic pocket/active-draft transfers with revision checks, safe swap, Delete/Undo and restart recovery of pending deletes.
 - Canonical rich content, structural selection, custom-emoji file metadata, reply/quote and local composer-state persistence.
 - Native composer entry and list, local English/Hebrew strings, accessibility labels, theme and Reduce Motion handling.
+- Durable media archives, transactional owners for cards/Undo/active drafts/pending messages, and explicit recovery of interrupted composer sends; native validation pending.
 
-**Media-containing drafts are currently refused without clearing the composer.** Durable media-byte ownership is not implemented. The full-client offline fixture and supported XCTest scenario are prepared; native build/runtime validation and visual QA remain outstanding. See [limitations](docs/LIMITATIONS.md).
+Media transfers require complete, verified resource bytes before the composer can be cleared. Missing or unsupported resources are refused. The newly integrated ownership lifecycle and its native byte tests have not run yet; full media support is not verified. The full-client offline fixture and supported XCTest scenario are prepared; native build/runtime validation and visual QA remain outstanding. See [limitations](docs/LIMITATIONS.md).
 
 Pocket cards remain on this device; the active draft uses Telegram's existing synchronization. No server API or Pocket cloud sync is added. Secret Chats, sent-message editing, unfinished recordings and independent forms are excluded.
 

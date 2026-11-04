@@ -20,6 +20,10 @@
     {
       "target": "//submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer:DraftPocketSelectionBridgeTests",
       "filter": "DocumentSelectionBridgeTests"
+    },
+    {
+      "target": "//submodules/Postbox:DraftMediaRetentionTests",
+      "filter": "MediaBoxDraftRetentionTests"
     }
   ]
 }

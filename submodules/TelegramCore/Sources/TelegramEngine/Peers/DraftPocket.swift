@@ -176,6 +176,8 @@ struct DraftPocketState: Codable {
 }
 
 public struct DraftPocketView {
+    public var pendingSends: [DraftPocketSendRecovery] = []
+    public var mediaRecoveryUnavailable: Bool = false
     public let revision: Int64
     public let items: [DraftPocketItem]
     public let deletedItems: [DraftPocketItem]
@@ -214,7 +216,7 @@ private func draftPocketStoredActive(transaction: Transaction, peerId: PeerId, t
     return transaction.getPeerChatInterfaceState(peerId)
 }
 
-private func draftPocketRead(transaction: Transaction, peerId: PeerId, threadId: Int64?) throws -> DraftPocketState {
+func draftPocketRead(transaction: Transaction, peerId: PeerId, threadId: Int64?) throws -> DraftPocketState {
     guard let entry = transaction.getPreferencesEntry(key: PreferencesKeys.draftPocket(peerId: peerId, threadId: threadId)) else {
         return DraftPocketState()
     }
@@ -234,7 +236,9 @@ func _internal_draftPocketView(transaction: Transaction, peerId: PeerId, threadI
     let token = draftPocketStoredActive(transaction: transaction, peerId: peerId, threadId: threadId)?.data
     do {
         let state = try draftPocketRead(transaction: transaction, peerId: peerId, threadId: threadId)
-        return DraftPocketView(revision: state.revision, items: state.items, deletedItems: state.deletedItems, activeStateToken: token, error: nil)
+        var view = DraftPocketView(revision: state.revision, items: state.items, deletedItems: state.deletedItems, activeStateToken: token, error: nil)
+        view.pendingSends = try DraftPocketMediaOwnership.read(transaction: transaction).pendingSends.filter { $0.peerId == peerId.toInt64() && $0.threadId == threadId }
+        return view
     } catch {
         return DraftPocketView(revision: 0, items: [], deletedItems: [], activeStateToken: token, error: .corruptStorage)
     }
@@ -242,12 +246,22 @@ func _internal_draftPocketView(transaction: Transaction, peerId: PeerId, threadI
 
 func _internal_draftPocket(postbox: Postbox, peerId: PeerId, threadId: Int64?) -> Signal<DraftPocketView, NoError> {
     return postbox.transaction { transaction in
-        return _internal_draftPocketView(transaction: transaction, peerId: peerId, threadId: threadId)
+        var view = _internal_draftPocketView(transaction: transaction, peerId: peerId, threadId: threadId)
+        if !postbox.mediaBox.draftResourceRecoverySucceeded,
+           let graph = try? DraftPocketMediaOwnership.read(transaction: transaction) {
+            view.mediaRecoveryUnavailable = graph.entries.contains { entry in
+                entry.owner.peerId == peerId.toInt64()
+                    && (entry.owner.threadId == threadId || entry.owner.kind == 4)
+                    && (postbox.mediaBox.draftResourceRecoveryIndexCorrupt
+                        || entry.resources.contains { postbox.mediaBox.draftResourceRecoveryFailedIds.contains($0.id) })
+            }
+        }
+        return view
     }
 }
 
 func _internal_observeDraftPocket(postbox: Postbox, peerId: PeerId, threadId: Int64?) -> Signal<DraftPocketView, NoError> {
-    return postbox.preferencesView(keys: [PreferencesKeys.draftPocket(peerId: peerId, threadId: threadId)])
+    return postbox.preferencesView(keys: [PreferencesKeys.draftPocket(peerId: peerId, threadId: threadId), PreferencesKeys.draftPocketMediaOwnership])
     |> mapToSignal { _ in
         return _internal_draftPocket(postbox: postbox, peerId: peerId, threadId: threadId)
     }
@@ -256,7 +270,7 @@ func _internal_observeDraftPocket(postbox: Postbox, peerId: PeerId, threadId: In
 /// All validation and encoding finishes before the first table mutation. Postbox serializes
 /// this transaction, committing the pocket and active composer together. A repeated request
 /// carrying an old revision/token fails without writing; it cannot create another card.
-func _internal_updateDraftPocket(transaction: Transaction, peerId: PeerId, threadId: Int64?, expectedRevision: Int64, expectedActiveState: Data?, operation: DraftPocketOperation, now: Int32, itemId: String, encodePocket: (DraftPocketState) throws -> Data = { try AdaptedPostboxEncoder().encode($0) }) -> DraftPocketResult {
+func _internal_updateDraftPocket(transaction: Transaction, peerId: PeerId, threadId: Int64?, expectedRevision: Int64, expectedActiveState: Data?, operation: DraftPocketOperation, now: Int32, itemId: String, mediaPreparation: DraftPocketMediaPreparation? = nil, encodePocket: (DraftPocketState) throws -> Data = { try AdaptedPostboxEncoder().encode($0) }) -> DraftPocketResult {
     guard peerId.namespace == Namespaces.Peer.CloudUser || peerId.namespace == Namespaces.Peer.CloudGroup || peerId.namespace == Namespaces.Peer.CloudChannel else {
         return .failure(.unsupportedContext)
     }
@@ -278,28 +292,36 @@ func _internal_updateDraftPocket(transaction: Transaction, peerId: PeerId, threa
         // its autosave must not invalidate Undo or deletion of a different stored card.
         break
     }
+    func mediaIsRetained(_ snapshot: DraftPocketSnapshot) -> Bool {
+        if let mediaPreparation = mediaPreparation {
+            guard let ids = draftPocketRetainedResourceIds(in: snapshot.resolvedContent) else { return false }
+            return (try? mediaPreparation.resources(for: ids)) != nil
+        }
+        return snapshot.content.allMedia.isEmpty && snapshot.resolvedContent.draftPocketCustomEmojiFiles().values.allSatisfy({ !($0.resource is LocalFileMediaResource) && !($0.resource is LocalFileReferenceMediaResource) })
+    }
     var active: OpaqueChatInterfaceState?
+    var activeResourceIds: [String]?
     switch operation {
     case let .putAside(snapshot, clearedState):
-        guard snapshot.content.allMedia.isEmpty else { return .failure(.mediaRetentionUnavailable) }
+        guard mediaIsRetained(snapshot) else { return .failure(.mediaRetentionUnavailable) }
         guard let snapshot = try? snapshot.resolvingCachedEmoji(transaction: transaction) else { return .failure(.encodingFailed) }
         guard let snapshotState = try? snapshot.interfaceState() else { return .failure(.encodingFailed) }
         guard snapshotState.mediaDraftState == nil, clearedState.mediaDraftState == nil else { return .failure(.unsupportedContext) }
-        guard snapshot.resolvedContent.draftPocketCustomEmojiFiles().values.allSatisfy({ !($0.resource is LocalFileMediaResource) && !($0.resource is LocalFileReferenceMediaResource) }) else { return .failure(.mediaRetentionUnavailable) }
         let reply = snapshotState.synchronizeableInputState?.replySubject
         guard !snapshot.content.isEmpty || reply != nil else { return .failure(.empty) }
         guard state.items.count + state.deletedItems.count < draftPocketItemLimit else { return .failure(.full) }
         state.items.insert(DraftPocketItem(id: itemId, now: now, peerId: peerId, threadId: threadId, snapshot: snapshot), at: 0)
         active = clearedState
+        activeResourceIds = []
     case let .restore(id, current, restoredState):
         guard let index = state.items.firstIndex(where: { $0.id == id }) else { return .failure(.itemNotFound) }
-        guard state.items[index].snapshot.content.allMedia.isEmpty, current?.content.allMedia.isEmpty ?? true else { return .failure(.mediaRetentionUnavailable) }
+        guard mediaIsRetained(state.items[index].snapshot), current.map(mediaIsRetained) ?? true else { return .failure(.mediaRetentionUnavailable) }
         guard restoredState.mediaDraftState == nil else { return .failure(.unsupportedContext) }
+        activeResourceIds = draftPocketRetainedResourceIds(in: state.items[index].snapshot.resolvedContent)
         state.items.remove(at: index)
         if let current = current {
             guard let current = try? current.resolvingCachedEmoji(transaction: transaction) else { return .failure(.encodingFailed) }
             guard (try? current.interfaceState())?.mediaDraftState == nil else { return .failure(.unsupportedContext) }
-            guard current.resolvedContent.draftPocketCustomEmojiFiles().values.allSatisfy({ !($0.resource is LocalFileMediaResource) && !($0.resource is LocalFileReferenceMediaResource) }) else { return .failure(.mediaRetentionUnavailable) }
             state.items.insert(DraftPocketItem(id: itemId, now: now, peerId: peerId, threadId: threadId, snapshot: current), at: 0)
         }
         active = restoredState
@@ -317,7 +339,24 @@ func _internal_updateDraftPocket(transaction: Transaction, peerId: PeerId, threa
 
     let pocketData: Data
     let activeData: Data?
+    let ownershipData: Data?
     do {
+        if let preparation = mediaPreparation {
+            var ownership = try DraftPocketMediaOwnership.read(transaction: transaction)
+            ownership.entries.removeAll { $0.owner.peerId == peerId.toInt64() && $0.owner.threadId == threadId && ($0.owner.kind == 0 || $0.owner.kind == 1) }
+            for (items, deleted) in [(state.items, false), (state.deletedItems, true)] {
+                for item in items {
+                    guard let ids = draftPocketRetainedResourceIds(in: item.snapshot.resolvedContent) else { throw DraftPocketError.mediaRetentionUnavailable }
+                    try ownership.set(.card(peerId: peerId, threadId: threadId, id: item.id, deleted: deleted), resources: preparation.resources(for: ids))
+                }
+            }
+            if let ids = activeResourceIds {
+                try ownership.set(.active(peerId: peerId, threadId: threadId), resources: preparation.resources(for: ids))
+            }
+            ownershipData = try ownership.encodedForCommit()
+        } else {
+            ownershipData = nil
+        }
         pocketData = try encodePocket(state)
         // Verify the actual codec before a destructive transfer, including unknown block loss.
         let decoded = try AdaptedPostboxDecoder().decode(DraftPocketState.self, from: pocketData)
@@ -334,6 +373,7 @@ func _internal_updateDraftPocket(transaction: Transaction, peerId: PeerId, threa
     } catch {
         return .failure(.encodingFailed)
     }
+    if let ownershipData = ownershipData { DraftPocketMediaOwnership.commitEncoded(ownershipData, transaction: transaction) }
     transaction.setPreferencesEntry(key: PreferencesKeys.draftPocket(peerId: peerId, threadId: threadId), value: PreferencesEntry(data: pocketData))
     if let active = active, let activeData = activeData {
         let stored = StoredPeerChatInterfaceState(overrideChatTimestamp: active.synchronizeableInputState?.timestamp, historyScrollMessageIndex: active.historyScrollMessageIndex, associatedMessageIds: active.synchronizeableInputState?.replySubject.map { [$0.messageId] } ?? [], data: activeData)
@@ -347,7 +387,7 @@ func _internal_updateDraftPocket(transaction: Transaction, peerId: PeerId, threa
             addSynchronizeChatInputStateOperation(transaction: transaction, peerId: peerId, threadId: threadId)
         }
     }
-    return .success(DraftPocketView(revision: state.revision, items: state.items, deletedItems: state.deletedItems, activeStateToken: activeData ?? previousActive?.data, error: nil))
+    return .success(_internal_draftPocketView(transaction: transaction, peerId: peerId, threadId: threadId))
 }
 
 func _internal_updateDraftPocket(postbox: Postbox, peerId: PeerId, threadId: Int64?, expectedRevision: Int64, expectedActiveState: Data?, operation: DraftPocketOperation) -> Signal<DraftPocketResult, NoError> {
