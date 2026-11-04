@@ -11,6 +11,8 @@ bash scripts/check-integration.sh "/path/to/new/telegram-ios"
 
 Bootstrap rejects an existing destination. It checks out the exact commit and initializes dependencies only when `--submodules` is supplied. No reset, clean, or deletion of a user's checkout is performed. `check-integration.sh` requires a clean base checkout and **applies** the package there, after a complete preflight. It verifies the patch and every resulting file hash. For the separate development tree:
 
+Bootstrap sets repository-local `core.autocrlf=false` before checkout, preserving pinned LF bytes. An existing checkout must also contain those exact LF bytes; changing its Git setting afterward does not convert files already checked out with CRLF. Prefer a new bootstrap checkout instead of rewriting an existing tree with unknown edits. Export rehearses the generated patch against exact base blobs and rejects any disagreement with authored bytes before writing package outputs.
+
 ```sh
 bash scripts/check-integration.sh "/path/to/new/verification-tree" --reference "/path/to/development-tree"
 ```

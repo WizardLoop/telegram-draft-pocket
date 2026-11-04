@@ -9,28 +9,172 @@ import math
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
+import stat
 import statistics
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
-import xml.etree.ElementTree as ET
+import zipfile
 
 import package
 
 
-def verify_scenario(report_text, events, test_filter, started, finished):
+def xcresult_cases(root, read_reference):
+    """Read the legacy native schema used by the pinned xctestrunner itself."""
+    cases = []
+
+    def values(container, key):
+        wrapper = container.get(key) if isinstance(container, dict) else None
+        result = wrapper.get("_values") if isinstance(wrapper, dict) else None
+        if not isinstance(result, list):
+            raise package.PackageError(f"Native xcresult has an unsupported {key} schema")
+        return result
+
+    def value(container, key):
+        wrapper = container.get(key) if isinstance(container, dict) else None
+        return wrapper.get("_value") if isinstance(wrapper, dict) else None
+
+    def visit(node, ancestors):
+        if not isinstance(node, dict):
+            raise package.PackageError("Native xcresult contains an invalid test node")
+        identifier = value(node, "identifier") or value(node, "name")
+        names = ancestors + ([identifier] if isinstance(identifier, str) else [])
+        if "subtests" in node:
+            for child in values(node, "subtests"):
+                visit(child, names)
+        else:
+            status = value(node, "testStatus")
+            if not isinstance(identifier, str) or not isinstance(status, str):
+                raise package.PackageError("Native xcresult leaf lacks test identity/status")
+            cases.append({"identifier": "/".join(names), "status": status})
+
+    actions = values(root, "actions")
+    references = []
+    for action in actions:
+        if not isinstance(action, dict) or not isinstance(action.get("_type"), dict):
+            raise package.PackageError("Native xcresult contains an invalid action")
+        if action["_type"].get("_name") != "ActionRecord":
+            continue
+        action_result = action.get("actionResult")
+        reference = action_result.get("testsRef") if isinstance(action_result, dict) else None
+        identifier = value(reference, "id")
+        if not isinstance(identifier, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_~+=/.-]{0,2047}", identifier):
+            raise package.PackageError("Native xcresult has no valid test-results reference")
+        references.append(identifier)
+    if not references or len(set(references)) != len(references):
+        raise package.PackageError("Native xcresult test references are empty or ambiguous")
+    for reference in references:
+        plans = read_reference(reference)
+        for plan in values(plans, "summaries"):
+            for testable in values(plan, "testableSummaries"):
+                for test in values(testable, "tests"):
+                    visit(test, [])
+    return cases
+
+
+def copy_xcresult(outputs, destination):
+    """Copy only the native result bundle; reject archive traversal/links first."""
+    bundle = outputs / "test.xcresult"
+    archive = outputs / "outputs.zip"
+    if bundle.exists() and archive.exists():
+        raise package.PackageError("Ambiguous native result: both directory and archive exist")
+    target = destination / "test.xcresult"
+    if target.exists():
+        raise package.PackageError("Native result extraction destination already exists")
+    if bundle.is_dir():
+        if bundle.is_symlink() or getattr(bundle, "is_junction", lambda: False)():
+            raise package.PackageError("Native result bundle must not be a link")
+        sources = []
+        for source in bundle.rglob("*"):
+            if source.is_symlink() or getattr(source, "is_junction", lambda: False)():
+                raise package.PackageError("Native result contains a link")
+            relative = package.relative(source.relative_to(bundle).as_posix())
+            if source.is_file():
+                sources.append((source, relative))
+            elif not source.is_dir():
+                raise package.PackageError("Native result contains a non-regular file")
+        if sum(source.stat().st_size for source, _ in sources) > 1024 ** 3:
+            raise package.PackageError("Native result bundle exceeds the 1 GiB copy limit")
+        for source, relative in sources:
+            output = package.bounded(destination, "test.xcresult/" + relative)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, output)
+    elif archive.is_file():
+        if archive.is_symlink():
+            raise package.PackageError("Native result archive must not be a link")
+        with zipfile.ZipFile(archive) as zipped:
+            selected, seen, size = [], set(), 0
+            for entry in zipped.infolist():
+                name = package.relative(entry.filename.rstrip("/"))
+                mode = stat.S_IFMT(entry.external_attr >> 16)
+                if mode not in (0, stat.S_IFREG, stat.S_IFDIR) or entry.flag_bits & 1:
+                    raise package.PackageError("Native result archive contains a link, special or encrypted entry")
+                if name.casefold() in seen:
+                    raise package.PackageError("Native result archive has duplicate/case-colliding paths")
+                seen.add(name.casefold())
+                if name.startswith("test.xcresult/") and not entry.is_dir():
+                    size += entry.file_size
+                    selected.append((entry, name))
+            if not selected or size > 1024 ** 3:
+                raise package.PackageError("Native result archive is missing its bundle or exceeds the 1 GiB extraction limit")
+            for entry, name in selected:
+                output = package.bounded(destination, name)
+                output.parent.mkdir(parents=True, exist_ok=True)
+                with zipped.open(entry) as source, output.open("xb") as sink:
+                    shutil.copyfileobj(source, sink)
+    else:
+        raise package.PackageError("Missing native test.xcresult in Bazel undeclared test outputs")
+    if not target.is_dir() or not any(p.is_file() for p in target.rglob("*")):
+        raise package.PackageError("Native result bundle is empty")
+    return target
+
+
+def native_results(test_directory, artifacts, redact):
+    with tempfile.TemporaryDirectory(prefix="draft-pocket-xcresult-") as temporary:
+        bundle = copy_xcresult(test_directory / "test.outputs", Path(temporary))
+        hashes = []
+        for source in sorted(p for p in bundle.rglob("*") if p.is_file()):
+            checksum = hashlib.sha256()
+            with source.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    checksum.update(chunk)
+            hashes.append({"path": source.relative_to(bundle).as_posix(), "sha256": checksum.hexdigest(), "bytes": source.stat().st_size})
+        (artifacts / "native-xcresult-files.json").write_text(json.dumps(hashes, indent=2) + "\n", encoding="utf-8")
+        # This exact legacy command/schema is also used by pinned xctestrunner
+        # 4c6f4931aa65b3e6573b3ca11753c98fc8d3071c on Xcode >=16.
+        command = ["xcrun", "xcresulttool", "get", "--format", "json", "--path", bundle, "--legacy"]
+        root_text = package.run(command).decode("utf-8")
+        (artifacts / "native-xcresult-root.json").write_text(redact(root_text), encoding="utf-8")
+        references = []
+
+        def read_reference(identifier):
+            data = package.run(command + ["--id", identifier]).decode("utf-8")
+            (artifacts / f"native-xcresult-tests-{len(references):02d}.json").write_text(redact(data), encoding="utf-8")
+            references.append(identifier)
+            return json.loads(data)
+
+        cases = xcresult_cases(json.loads(root_text), read_reference)
+        (artifacts / "native-xctest-cases.json").write_text(redact(json.dumps(cases, indent=2)) + "\n", encoding="utf-8")
+        return cases
+
+
+def verify_scenario(native_cases, events, test_filter, started, finished):
     """A generic passing test and an animated screen are not scenario evidence."""
-    result = ET.fromstring(report_text)
-    cases = [case for case in result.iter("testcase") if case.find("skipped") is None]
+    if not isinstance(native_cases, list) or any(not isinstance(case, dict) or not isinstance(case.get("identifier"), str)
+                                              or not isinstance(case.get("status"), str) for case in native_cases):
+        raise package.PackageError("Scenario proof requires native xcresult test cases, not generic XML")
+    cases = [case for case in native_cases if case.get("status") != "Skipped"]
     expected_class, expected_method = test_filter.split("/", 1)
-    identity = " ".join(cases[0].attrib.values()) if len(cases) == 1 else ""
+    identity = cases[0].get("identifier", "") if len(cases) == 1 else ""
     exact_name = lambda name: re.search(r"(?<![A-Za-z0-9_])" + re.escape(name) + r"(?![A-Za-z0-9_])", identity)
     if (len(cases) != 1 or not exact_name(expected_class) or not exact_name(expected_method)
-            or list(result.iter("failure")) or list(result.iter("error"))):
-        raise package.PackageError("XCTest XML does not prove the single requested scenario passed")
+            or cases[0].get("status") != "Success"):
+        raise package.PackageError("Native xcresult does not prove the single requested scenario passed")
     if expected_method == "testCaptureProductionStory":
         required = ["story_start", "put_aside_start", "put_aside_end", "put_aside_start", "put_aside_end",
                     "send_local_start", "send_local_end", "restore_start", "restore_end",
@@ -253,13 +397,15 @@ def capture(checkout, configuration, cache, artifacts, test_filter):
             raise package.PackageError("Recorder stopped before XCTest completed; take is incomplete")
         if code:
             raise package.PackageError(f"Real demo XCTest failed with exit {code}; raw evidence retained")
-        report = checkout / "bazel-testlogs/Tests/DraftPocketDemo/DraftPocketDemoUITests/test.xml"
-        report_text = report.read_text(encoding="utf-8")
-        (artifacts / "demo-xctest.xml").write_text(redact(report_text), encoding="utf-8")
+        test_directory = checkout / "bazel-testlogs/Tests/DraftPocketDemo/DraftPocketDemoUITests"
+        report = test_directory / "test.xml"
+        if report.is_file():
+            (artifacts / "bazel-wrapper.xml").write_text(redact(report.read_text(encoding="utf-8")), encoding="utf-8")
+        cases = native_results(test_directory, artifacts, redact)
         identity["reported_test_cases"] = verify_scenario(
-            report_text, events, test_filter,
+            cases, events, test_filter,
             datetime.datetime.fromisoformat(identity["recording_ready_utc"]).timestamp(), time.time())
-    except (package.PackageError, OSError, ValueError, ET.ParseError) as failure:
+    except (package.PackageError, OSError, ValueError, zipfile.BadZipFile) as failure:
         error = failure
     finally:
         if recorder and recorder.poll() is None:

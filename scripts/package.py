@@ -374,15 +374,36 @@ def export(root, checkout, paths_file, invalidate_demo=False):
         payloads[path] = bounded(checkout, path).read_bytes()
         copied.append({"action": "copy", "source": path, "target": path, "sha256": digest(payloads[path])})
     changes = []
+    originals = {}
     patch_data = b""
     if modified:
         patch_data = git(checkout, "diff", "--no-ext-diff", "--no-renames", "--binary", "--full-index", base["commit"], "--", *modified)
         if set(patch_targets(patch_data)) != set(modified):
             raise PackageError("Export patch omitted a listed file")
         for path in modified:
+            originals[path] = git(checkout, "show", f"{base['commit']}:{path}")
             changes.append({"action": "modify", "target": path,
-                            "before_sha256": digest(git(checkout, "show", f"{base['commit']}:{path}")),
+                            "before_sha256": digest(originals[path]),
                             "after_sha256": digest(bounded(checkout, path).read_bytes())})
+        # Git attributes/autocrlf can normalize diff content while the working
+        # file still has CRLF or mixed endings. Prove the actual patch recreates
+        # the exact authored bytes before writing any package output.
+        with tempfile.TemporaryDirectory(prefix="draft-pocket-export-preflight-") as temporary:
+            scratch = Path(temporary)
+            run(["git", "-c", "core.autocrlf=false", "init", "--quiet"], cwd=scratch)
+            for path, data in originals.items():
+                staged = bounded(scratch, path)
+                staged.parent.mkdir(parents=True, exist_ok=True)
+                staged.write_bytes(data)
+            rehearsal_patch = scratch / ".git/export.patch"
+            rehearsal_patch.write_bytes(patch_data)
+            run(["git", "-c", "core.autocrlf=false", "apply", "--check", "--whitespace=error", rehearsal_patch], cwd=scratch)
+            run(["git", "-c", "core.autocrlf=false", "apply", "--whitespace=error", rehearsal_patch], cwd=scratch)
+            for entry in changes:
+                if digest(bounded(scratch, entry["target"]).read_bytes()) != entry["after_sha256"]:
+                    raise PackageError(f"Export patch roundtrip differs from development bytes: {entry['target']}. "
+                                       "Review Git text attributes and normalize this development text file to LF, then re-export. "
+                                       "No package outputs were changed.")
     feature = {"files": copied}
     if patch_data:
         feature["patch"] = {"source": "Integration/telegram-ios.patch", "sha256": digest(patch_data), "files": changes}

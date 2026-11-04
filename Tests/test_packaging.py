@@ -279,6 +279,19 @@ class PackagingTests(unittest.TestCase):
             package.export_demo(self.root, self.integration, self.root / "Integration/demo-export-paths.json")
         self.assert_preflight_rejects_unchanged(with_demo=True)
 
+    def test_export_rejects_autocrlf_patch_source_disagreement_before_any_write(self):
+        before = {p.relative_to(self.root).as_posix(): p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
+        global_config = Path(self.temporary.name) / "global-export-gitconfig"
+        global_config.write_text("[core]\n\tautocrlf = true\n", encoding="utf-8", newline="\n")
+        package.git(self.integration, "config", "--unset", "core.autocrlf")
+        (self.integration / self.old).write_bytes(b"let old = false // changed\r\n")
+        (self.integration / self.new).write_bytes(b"// New payload must not be exported on failure.\n")
+        with patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(global_config), "GIT_CONFIG_NOSYSTEM": "1"}):
+            with self.assertRaisesRegex(package.PackageError, "roundtrip differs.*normalize"):
+                package.export(self.root, self.integration, self.root / "Integration/export-paths.json")
+        after = {p.relative_to(self.root).as_posix(): p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
+        self.assertEqual(before, after)
+
 
 if __name__ == "__main__":
     unittest.main()

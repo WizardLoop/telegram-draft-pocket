@@ -90,7 +90,7 @@
           "action": "modify",
           "target": "Tests/ComposerHarness/BUILD",
           "before_sha256": "e7d7f2a43f5979a81ff79e3af4f96d83a3ddcacf3f3d4fefda3b5b3e0fa136fd",
-          "after_sha256": "ac3c2a178af90d8bc62126fd9bf2a670d6c3c7115e5fa8d7f483b9b0aa9046ea"
+          "after_sha256": "11ba0d76c9a2735ae7c474ea1b541ce1c27904dcb790364150577aa4c3a502bc"
         },
         {
           "action": "modify",
@@ -132,7 +132,7 @@
           "action": "modify",
           "target": "submodules/TelegramCore/Sources/ChatInputContent/ChatInputContentModel.swift",
           "before_sha256": "2603a17b8f4fe579083717dc79a65241d524aeebc769d86137d2e6a083b1f5ef",
-          "after_sha256": "f206b8f5e1cd2316673a7f563664cadf494bade0cb53ef773874bd0eab9ab918"
+          "after_sha256": "58d940600d8907a45535cbf03e031250ddd59c6201143678d63c695803183c40"
         },
         {
           "action": "modify",
@@ -150,19 +150,19 @@
           "action": "modify",
           "target": "submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/ChatRichTextInputNode.swift",
           "before_sha256": "113b9aa9d9cba01f11ee1e1f35bd1ccdf224374627d550c4684fe6d5daa4401f",
-          "after_sha256": "982a45b1b4e002d2ef937a909bf022a9432196c1e1227de1e8191c383d7ccf78"
+          "after_sha256": "239f6063996965cff3505876d3aac4a605c67c7fa63973bc778c5c9292a3974d"
         },
         {
           "action": "modify",
           "target": "submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer/BUILD",
           "before_sha256": "a239ae02aff5ef77c0d532fcb274a5f982d008ed7e54bdea25c09912c8907e5c",
-          "after_sha256": "34dfeefcd25163799ae517be92c48a1226bc1874f9e4268c0aaf248423a65502"
+          "after_sha256": "fd7867500f79f614f736888261d7f1f76a0c62f9b2dda8ffcc7027ec75e0f3e2"
         },
         {
           "action": "modify",
           "target": "submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer/Sources/RichTextEditorChatInputNode.swift",
           "before_sha256": "b8cd5a8349fa5b78bc514b35f875c989a18611a6b9d17c6569599e49ed87a6a1",
-          "after_sha256": "1d993d1dfb2b73301cd96f9c52bad015d8cf92bdcd0e6bebf51f8b5d62b26827"
+          "after_sha256": "df96dcfe0346c1e9203073e30780199b7f256a38c38da793b1b245543f972efe"
         },
         {
           "action": "modify",
@@ -174,19 +174,19 @@
           "action": "modify",
           "target": "submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEditorUIKit/Canvas/DocumentCanvasView+ComposerSelection.swift",
           "before_sha256": "4d5b97d35774bb62e4c6b950a2fbe3524d9ce64672910b015e6cab1bd73e1186",
-          "after_sha256": "635acfe1e9a1f05fb798cd96a7cfcc97e88b18e66f96fb32a502d32451678ba8"
+          "after_sha256": "40cb1c5126ca5333903b9127fa6b34fc40c6b0fe4ecabc3aadf51dc9f8795eab"
         },
         {
           "action": "modify",
           "target": "submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEditorUIKit/RichTextEditorView+ComposerHost.swift",
           "before_sha256": "b78c0568858fd914cadb6c64ca4e592cda1870a46dd5a0f1596510529c3c20c0",
-          "after_sha256": "1bfc5616cfbb60843c2475721fff82f97cd9d183e77c9910fe4beb9deee2f822"
+          "after_sha256": "f6ae5d42fbefc090a68ea1a56b5bd6e35384fd8d24d2e51352d1c50e54f52112"
         },
         {
           "action": "modify",
           "target": "submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEngineEditor/RichTextEditorProtocol.swift",
           "before_sha256": "62f79ff0c510a3afaeaa88e6dd5f607458e1f52c20bcc9b49530448615d55d78",
-          "after_sha256": "d5cf1d946467e1c35befacd0fdbc1ba34bd1c68944595ca4bb003c871ea8aa3c"
+          "after_sha256": "4000207bd8572243c16c3fe78d1dfdaa8b4b001d3185d96b641c39e9eb5e3000"
         },
         {
           "action": "modify",
