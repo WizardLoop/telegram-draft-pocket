@@ -4,6 +4,7 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path, PurePosixPath
 import platform
 import re
@@ -22,7 +23,16 @@ class PackageError(Exception):
 
 
 def run(args, cwd=None, capture=True):
+    environment = None
+    if Path(str(args[0])).stem.lower() == "git":
+        environment = os.environ.copy()
+        # Every command is addressed to an explicit checkout. Inherited worktree/
+        # index overrides must not redirect a rehearsal or install to another tree.
+        for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+                    "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"):
+            environment.pop(key, None)
     result = subprocess.run([str(arg) for arg in args], cwd=cwd, check=False,
+                            env=environment,
                             stdout=subprocess.PIPE if capture else None,
                             stderr=subprocess.PIPE if capture else None)
     if result.returncode:
@@ -229,6 +239,10 @@ def prepare(root, checkout, with_demo=False, require_clean=False):
     # This directory is disposable; the user's checkout is untouched during preflight.
     with tempfile.TemporaryDirectory(prefix="draft-pocket-preflight-") as temporary:
         scratch = Path(temporary)
+        # A real repository anchors relative patch paths even when TMPDIR lies
+        # inside another worktree. Explicit LF handling defeats host autocrlf.
+        run(["git", "-c", "core.autocrlf=false", "init", "--quiet"], cwd=scratch)
+        git(scratch, "config", "core.autocrlf", "false")
         for section in sections(manifest, with_demo):
             for entry in section.get("files", []):
                 destination = bounded(checkout, entry["target"])
@@ -250,8 +264,8 @@ def prepare(root, checkout, with_demo=False, require_clean=False):
                         staged.write_bytes(original.read_bytes())
                     check_hash(staged, entry["before_sha256"])
                 patch_path = bounded(root, patch["source"])
-                run(["git", "apply", "--check", "--whitespace=error", patch_path], cwd=scratch)
-                run(["git", "apply", "--whitespace=error", patch_path], cwd=scratch)
+                run(["git", "-c", "core.autocrlf=false", "apply", "--check", "--whitespace=error", patch_path], cwd=scratch)
+                run(["git", "-c", "core.autocrlf=false", "apply", "--whitespace=error", patch_path], cwd=scratch)
                 for entry in patch["files"]:
                     check_hash(bounded(scratch, entry["target"]), entry["after_sha256"])
         for path, sha in expected.items():
@@ -273,7 +287,7 @@ def apply(root, checkout, with_demo=False, require_clean=False):
             with destination.open("xb") as output:
                 output.write(bounded(root, entry["source"]).read_bytes())
         if section.get("patch"):
-            run(["git", "apply", "--whitespace=error", bounded(root, section["patch"]["source"])], cwd=checkout)
+            run(["git", "-c", "core.autocrlf=false", "apply", "--whitespace=error", bounded(root, section["patch"]["source"])], cwd=checkout)
     if not is_applied(checkout, all_expected(manifest, with_demo)):
         raise PackageError("Post-application verification failed; preserve this tree for inspection and use a new checkout")
     print("Package applied; all target hashes and changed-file inventory verified. iOS build/runtime NOT RUN.")
@@ -308,8 +322,12 @@ def export(root, checkout, paths_file):
         raise PackageError("Export path list must have schema_version 1")
     new = [relative(path) for path in paths.get("feature_new", [])]
     modified = [relative(path) for path in paths.get("feature_modified", [])]
+    if not new and not modified:
+        raise PackageError("Export allowlist contains no implementation")
     if len(set(new + modified)) != len(new + modified):
         raise PackageError("Export allowlist has duplicate paths")
+    if len({path.casefold() for path in new + modified}) != len(new + modified):
+        raise PackageError("Export paths collide on a case-insensitive filesystem")
     if changed_paths(checkout) != set(new + modified):
         raise PackageError("Integration changes differ from the explicit export allowlist: " +
                            ", ".join(sorted(changed_paths(checkout) ^ set(new + modified))))
@@ -409,7 +427,7 @@ def validate_configuration(config):
     api_id = config["api_id"]
     if isinstance(api_id, bool) or not isinstance(api_id, (str, int)) or not re.fullmatch(r"[0-9]+", str(api_id)):
         raise PackageError("api_id must be the owner's positive numeric Telegram API identifier")
-    if not 0 < int(api_id) <= 2147483647:
+    if len(str(api_id)) > 10 or not 0 < int(api_id) <= 2147483647:
         raise PackageError("api_id must fit a positive Int32")
     patterns = {
         "api_hash": r"[0-9A-Fa-f]{32}",

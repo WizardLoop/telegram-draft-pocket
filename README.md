@@ -2,7 +2,7 @@
 
 Put an unfinished Telegram iOS message aside, answer a quick question, and return to the draft.
 
-**Implementation draft.** No verified iOS build or real demo recording is available yet. The complete source is on [`feature/draft-pocket`](https://github.com/WizardLoop/telegram-draft-pocket/tree/feature/draft-pocket), pending review into `main`.
+**Implementation draft.** No verified iOS build or real demo recording is available yet. The source is on [`feature/draft-pocket`](https://github.com/WizardLoop/telegram-draft-pocket/tree/feature/draft-pocket) in [Draft PR #1](https://github.com/WizardLoop/telegram-draft-pocket/pull/1), pending review into `main`.
 
 ## Demo
 

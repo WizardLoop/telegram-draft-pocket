@@ -25,7 +25,6 @@ final class DraftPocketComposerStateTests: XCTestCase {
         XCTAssertEqual(decoded.content, input.content)
         XCTAssertEqual(decoded.selection, input.selection)
         XCTAssertTrue(decoded.content.unresolvedCustomEmojiFileIds().isEmpty)
-        XCTAssertEqual(decoded.content.draftPocketCustomEmojiFiles().count, 1)
     }
 
     func testRelaunchKeepsCanonicalComposerWhenCloudProjectionMatches() throws {

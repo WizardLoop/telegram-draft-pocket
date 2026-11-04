@@ -4,6 +4,7 @@ Status: implementation draft; no approved production capture.
 
 - Repository: https://github.com/WizardLoop/telegram-draft-pocket
 - Source branch: https://github.com/WizardLoop/telegram-draft-pocket/tree/feature/draft-pocket
+- Draft PR: https://github.com/WizardLoop/telegram-draft-pocket/pull/1
 - Target branch: `main`; do not merge until the reconstructed client builds and runs.
 - Telegram base: `279f89e4d4f63f17227bf877dc3d8990f22ecd58`.
 - Feature commit: use the immutable PR head SHA, not the mutable branch name.

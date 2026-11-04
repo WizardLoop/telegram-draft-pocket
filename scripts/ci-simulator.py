@@ -25,7 +25,7 @@ def main():
     status = {"schema_version": 1, "started_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
               "feature_commit": os.environ.get("DRAFT_POCKET_FEATURE_COMMIT"),
               "tested_merge_commit": os.environ.get("GITHUB_SHA"), "upstream_commit": None,
-              "stages": {name: "not_run" for name in ("toolchain", "configuration", "reconstruction", "build", "native_tests", "capture")}}
+              "stages": {name: "not_run" for name in ("package_integrity", "toolchain", "configuration", "reconstruction", "build", "native_tests", "capture")}}
     redactions = []
 
     def save():
@@ -49,13 +49,17 @@ def main():
         if code:
             raise package.PackageError(f"{name} exited {code}; see its redacted log")
 
-    stage = "toolchain"
+    stage = "package_integrity"
     status["stages"][stage] = "running"
     save()
     try:
         base, manifest = package.validate_package(ROOT)
         status["upstream_commit"] = base["commit"]
         status["patch_sha256"] = manifest["feature"].get("patch", {}).get("sha256")
+        status["stages"][stage] = "passed"
+        stage = "toolchain"
+        status["stages"][stage] = "running"
+        save()
         if platform.system() != "Darwin" or platform.machine() != "arm64":
             raise package.PackageError("The pinned simulator build requires an Apple Silicon macOS runner")
         macos = package.run(["sw_vers", "-productVersion"]).decode().strip()

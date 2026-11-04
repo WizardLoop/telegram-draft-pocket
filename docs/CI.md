@@ -30,7 +30,7 @@ The Simulator build uses the pinned upstream `Make.py` and its full `Telegram/Te
 
 ## Evidence and current capture boundary
 
-`status.json` distinguishes toolchain, configuration, reconstruction, build, native tests and capture. A stage that did not run stays `not_run`; an interrupted stage can remain `running`. Redacted logs and toolchain metadata are uploaded with an `always()` step when the runner can still execute it. Failure before runner allocation or forced job termination can prevent artifact upload and must not be reported as a successful attempt.
+`status.json` distinguishes package integrity, toolchain, configuration, reconstruction, build, native tests and capture. A stage that did not run stays `not_run`; an interrupted stage can remain `running`. Redacted logs and toolchain metadata are uploaded with an `always()` step when the runner can still execute it. Failure before runner allocation or forced job termination can prevent artifact upload and must not be reported as a successful attempt.
 
 There is currently no validated isolated full-client offline fixture or UI automation entry point. Consequently, the capture stage fails explicitly before opening an account or Simulator app. `Demo/run-demo.sh` is a fail-closed availability check, not a working demo launcher. It accepts the intended UDID/app arguments, returns nonzero when execution is unavailable, and never manufactures a recording. A successful build would still leave this capture requirement incomplete.
 

@@ -7,7 +7,7 @@
         "action": "copy",
         "source": "submodules/ChatInterfaceState/Tests/DraftPocketComposerStateTests.swift",
         "target": "submodules/ChatInterfaceState/Tests/DraftPocketComposerStateTests.swift",
-        "sha256": "5807872e5f8141e40eae190e374e812bbf562e2af5cd851c8e0db19ed2284469"
+        "sha256": "f04a47160ea53e48b70cec9648776dee8fac9203f78902bf70ebc55d05c645fe"
       },
       {
         "action": "copy",

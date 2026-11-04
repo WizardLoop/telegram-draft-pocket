@@ -2,9 +2,11 @@
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 SPEC = importlib.util.spec_from_file_location("package", Path(__file__).parents[1] / "scripts/package.py")
@@ -174,6 +176,21 @@ class PackagingTests(unittest.TestCase):
         del manifest["feature"]["patch"]
         self.write_json("Integration/files.json", manifest)
         self.assert_preflight_rejects_unchanged()
+
+    def test_global_autocrlf_cannot_change_package_bytes(self):
+        global_config = Path(self.temporary.name) / "global-gitconfig"
+        global_config.write_text("[core]\n\tautocrlf = true\n", encoding="utf-8")
+        with patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(global_config), "GIT_CONFIG_NOSYSTEM": "1"}):
+            package.apply(self.root, self.target, require_clean=True)
+        self.assertEqual((self.target / self.old).read_bytes(), (self.integration / self.old).read_bytes())
+        self.assertEqual((self.target / self.new).read_bytes(), (self.integration / self.new).read_bytes())
+
+    def test_inherited_git_directory_cannot_redirect_install(self):
+        original = (self.integration / self.old).read_bytes()
+        with patch.dict(os.environ, {"GIT_DIR": str(self.integration / ".git"), "GIT_WORK_TREE": str(self.integration)}):
+            package.apply(self.root, self.target, require_clean=True)
+        self.assertEqual(original, (self.integration / self.old).read_bytes())
+        self.assertEqual((self.target / self.old).read_bytes(), original)
 
 
 if __name__ == "__main__":

@@ -4,17 +4,20 @@ Date: 2026-11-04. Development host: Windows, Python 3.13, Git for Windows. No Sw
 
 | Layer | Actual status | Evidence / command |
 |---|---|---|
-| Packaging regression suite | 14 passed; 1 skipped (Windows cannot create symlinks) | `python -m unittest discover -s Tests -v` |
+| Packaging/configuration regression suite | 25 passed; 1 skipped (Windows cannot create symlinks), 165.302 s; two subsequently added CRLF/environment regression cases passed separately | `python -m unittest discover -s Tests -v` (current suite: 28 cases) |
 | Python compilation / shell syntax | Passed for packaging scripts | `python -m py_compile scripts/package.py scripts/ci-simulator.py`; Bash `-n` |
 | Upstream pin | Verified against official remote | `Integration/BASE.json` |
-| Overlay and patch reconstruction | Pending final export | `bash scripts/check-integration.sh NEW_CLEAN_CHECKOUT --reference DEVELOPMENT_CHECKOUT` |
-| Native codec and Postbox tests | Authored; not run locally | `//submodules/TelegramCore:DraftPocketTests` |
+| Overlay and patch reconstruction | Passed on a second clean checkout: all 18 resulting file hashes equal development tree; exact repeat application recognized | `bash scripts/check-integration.sh NEW_CLEAN_CHECKOUT --reference DEVELOPMENT_CHECKOUT` |
+| Native codec and Postbox tests | 15 cases authored across two targets; not run locally | `//submodules/TelegramCore:DraftPocketTests`, `//submodules/ChatInterfaceState:DraftPocketComposerTests` |
 | Reconstructed iOS client build | Not run locally | Requires pinned macOS/Xcode and owner configuration |
 | Full-client UI / accessibility / animation | Not run | Requires rebuilt client on dedicated Simulator/device |
 | Full-client offline demo and capture | Blocked | Missing isolated full-client fixture; no media artifact |
-| GitHub Actions attempt | Pending publication and trigger | See `CI.md`; actual run links will be recorded separately |
+| GitHub Actions packaging | Passed initial public Linux run, including clean upstream reconstruction | [Run 41895249891](https://github.com/WizardLoop/telegram-draft-pocket/actions/runs/41895249891) |
+| GitHub Actions macOS | Manual trigger being prepared after successful reconstruction | Owner configuration secret metadata verified; secret value never read locally |
 
 Packaging tests use actual temporary Git repositories. They exercise base mismatch, changed sources, tampered hashes, patch preflight, collision rejection, path traversal, repeated application, incomplete state, unexpected files, export of untracked sources and paths containing spaces. The symlink case must run on Linux/macOS CI; a skipped case is not a pass.
+
+The first Windows reconstruction caught global `core.autocrlf` conversion during scratch `git apply`. Preflight left the target clean. The corrected script uses an isolated scratch repository, explicitly disables line-ending conversion and strips inherited Git path overrides; the real reconstruction and two new regression cases then passed.
 
 Native tests use the real `ChatInputContent`, `AdaptedPostboxEncoder/Decoder`, Postbox transactions and an on-disk reopen. They cover rich content, emoji metadata, reply/quote, structural selection, Put Aside, duplicate request rejection, Restore/swap, Delete/Undo, capacity, topic/peer/account isolation, stale active-state rejection, future-schema rejection, and safe media refusal. They do **not** prove media retention, UI, animation, process-kill crash recovery, storage hardware failures or live cloud-race behavior.
 
