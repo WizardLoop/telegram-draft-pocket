@@ -7,6 +7,27 @@ import XCTest
 /// Uses the production codec and real Postbox transactions, including reopen-on-disk.
 /// These are simulator tests, not a substitute package with duplicate models.
 final class DraftPocketTests: XCTestCase {
+    func testSelectionAffinityCodecRemainsCompatibleWithOlderCards() throws {
+        struct Step: Codable { var block: Int32; var slot: Int32 }
+        struct Position: Codable { var path: [Step]; var offset: Int32; var affinity: Int32? }
+        struct Selection: Codable { var start: Position; var end: Position }
+        let start = ChatInputPosition(path: [.init(blockIndex: 1, slot: 1)], offset: 2, affinity: .upstream)
+        let end = ChatInputPosition(path: start.path, offset: 2, affinity: .downstream)
+        let selection = ChatInputSelection(start: start, end: end)
+        XCTAssertTrue(selection.isCollapsed, "affinity must not turn a text caret into a nonempty range")
+        let encoded = try AdaptedPostboxEncoder().encode(DraftPocketSelection(selection))
+        XCTAssertEqual(try AdaptedPostboxDecoder().decode(DraftPocketSelection.self, from: encoded).value, selection)
+
+        let oldPosition = Position(path: [Step(block: 0, slot: 0)], offset: 3, affinity: nil)
+        let oldData = try AdaptedPostboxEncoder().encode(Selection(start: oldPosition, end: oldPosition))
+        let old = try AdaptedPostboxDecoder().decode(DraftPocketSelection.self, from: oldData).value
+        XCTAssertNil(old.start.affinity)
+        XCTAssertEqual(old.start.offset, 3)
+        let unknownPosition = Position(path: oldPosition.path, offset: 3, affinity: 42)
+        let unknownData = try AdaptedPostboxEncoder().encode(Selection(start: unknownPosition, end: unknownPosition))
+        XCTAssertThrowsError(try AdaptedPostboxDecoder().decode(DraftPocketSelection.self, from: unknownData))
+    }
+
     private var directory: URL!
     private var postbox: Postbox!
     private let peerId = PeerId(namespace: Namespaces.Peer.CloudUser, id: ._internalFromInt64Value(1001))
@@ -102,7 +123,7 @@ final class DraftPocketTests: XCTestCase {
             ChatInputRun(text: "👨‍👩‍👧‍👦", attributes: ChatInputInlineAttributes(entity: .customEmoji(fileId: file.fileId.id, file: file, enableAnimation: true)))
         ]))])
         let content = ChatInputContent(blocks: [.blockQuote(ChatInputBlockQuote(content: nested, collapsed: true))])
-        let position = ChatInputPosition(path: [ChatInputPathStep(blockIndex: 0), ChatInputPathStep(blockIndex: 0)], offset: 7)
+        let position = ChatInputPosition(path: [ChatInputPathStep(blockIndex: 0), ChatInputPathStep(blockIndex: 0)], offset: 7, affinity: .upstream)
         let selection = ChatInputSelection(start: position, end: position)
         let reply = EngineMessageReplySubject(messageId: MessageId(peerId: self.peerId, namespace: Namespaces.Message.Cloud, id: 7), quote: EngineMessageReplyQuote(text: "quote", offset: 2, entities: [], media: nil, richText: nil), innerSubject: nil)
         let sync = SynchronizeableChatInputState(replySubject: reply, text: "ignored preview", entities: [], timestamp: 123, textSelection: nil, messageEffectId: nil, suggestedPost: nil)

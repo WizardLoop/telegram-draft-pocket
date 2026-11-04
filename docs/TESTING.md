@@ -4,16 +4,16 @@ Date: 2026-11-04. Development host: Windows, Python 3.13, Git for Windows. No Sw
 
 | Layer | Actual status | Evidence / command |
 |---|---|---|
-| Packaging/configuration regression suite | 25 passed; 1 skipped (Windows cannot create symlinks), 165.302 s; two subsequently added CRLF/environment regression cases passed separately | `python -m unittest discover -s Tests -v` (current suite: 28 cases) |
+| Packaging/configuration/capture regression suite | All 43 current cases exercised: 42 passed; 1 skipped (Windows cannot create symlinks). Full 33-case run took 439.586 s; 10 subsequently added cases passed separately | `python -m unittest discover -s Tests -v`; this was not one combined 43-case run |
 | Python compilation / shell syntax | Passed for packaging scripts | `python -m py_compile scripts/package.py scripts/ci-simulator.py`; Bash `-n` |
 | Upstream pin | Verified against official remote | `Integration/BASE.json` |
 | Overlay and patch reconstruction | Passed on a second clean checkout: all 18 resulting file hashes equal development tree; exact repeat application recognized | `bash scripts/check-integration.sh NEW_CLEAN_CHECKOUT --reference DEVELOPMENT_CHECKOUT` |
-| Native codec and Postbox tests | 15 cases authored across two targets; not run locally | `//submodules/TelegramCore:DraftPocketTests`, `//submodules/ChatInterfaceState:DraftPocketComposerTests` |
+| Native feature tests | 33 cases authored: 13 core, 3 interface, 10 actual composer-node, 4 structural bridge, 3 legacy UIKit facade; not run locally | Four Bazel targets in `BASE.json` cover 30 cases; the additional 3 use upstream RichTextEditor's UIKit test suite |
 | Reconstructed iOS client build | Not run locally | Requires pinned macOS/Xcode and owner configuration |
 | Full-client UI / accessibility / animation | Not run | Requires rebuilt client on dedicated Simulator/device |
-| Full-client offline demo and capture | Blocked | Missing isolated full-client fixture; no media artifact |
-| GitHub Actions packaging | Passed initial public Linux run, including clean upstream reconstruction | [Run 41895249891](https://github.com/WizardLoop/telegram-draft-pocket/actions/runs/41895249891) |
-| GitHub Actions macOS | Manual trigger being prepared after successful reconstruction | Owner configuration secret metadata verified; secret value never read locally |
+| Full-client offline demo and capture | Fixture and two real XCTest scenarios packaged; native run pending | Fictional `@wizardloop`, production UI/state, local enqueue only; no media artifact yet |
+| GitHub Actions packaging | Passed on updated commit `4c5fb3deb31128627b1a8f2131bb7135400becdf`: all 28 tests passed (1.357 s), including symlink case; clean reconstruction and repeat-apply passed | [Run 41896273365](https://github.com/WizardLoop/telegram-draft-pocket/actions/runs/41896273365) |
+| GitHub Actions macOS | Actual manual attempt running on commit `4c5fb3deb31128627b1a8f2131bb7135400becdf` | [Run 41896280828](https://github.com/WizardLoop/telegram-draft-pocket/actions/runs/41896280828); owner configuration supplied through Secrets |
 
 Packaging tests use actual temporary Git repositories. They exercise base mismatch, changed sources, tampered hashes, patch preflight, collision rejection, path traversal, repeated application, incomplete state, unexpected files, export of untracked sources and paths containing spaces. The symlink case must run on Linux/macOS CI; a skipped case is not a pass.
 

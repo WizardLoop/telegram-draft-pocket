@@ -37,6 +37,7 @@ extension ChatControllerImpl {
               self.presentationInterfaceState.interfaceState.mediaDraftState == nil,
               self.presentationInterfaceState.interfaceState.postSuggestionState == nil,
               self.audioRecorderValue == nil, self.videoRecorderValue == nil,
+              !self.draftPocketHasDraft || self.chatDisplayNode.textInputPanelNode?.richTextInputNode?.supportsExactInputSelection != false,
               canSendMessagesToChat(self.presentationInterfaceState) else { return false }
         return true
     }
@@ -150,6 +151,10 @@ extension ChatControllerImpl {
             }
             if let id {
                 guard let item = view.items.first(where: { $0.id == id }) else { return }
+                guard panel.richTextInputNode?.canRestoreInputSelection(item.snapshot.selection, in: item.snapshot.resolvedContent) != false else {
+                    self.draftPocketNotice(DraftPocketStrings(self.presentationData.strings).unsupported)
+                    return
+                }
                 let stored = try item.snapshot.interfaceState()
                 guard let data = stored.opaqueData else { throw DraftPocketError.corruptStorage }
                 let restored = try EngineDecoder.decode(ChatInterfaceState.self, from: data)
@@ -174,7 +179,7 @@ extension ChatControllerImpl {
             self.draftPocketNotice(DraftPocketStrings(self.presentationData.strings).failed)
             return
         }
-        guard let participants = DraftPocketControllerRegistry.lock(self, captured: captured) else {
+        guard let participants = DraftPocketControllerRegistry.lock(self, captured: captured, restoring: nextState.composeInputState) else {
             self.draftPocketNotice(DraftPocketStrings(self.presentationData.strings).changed)
             return
         }
@@ -210,6 +215,10 @@ extension ChatControllerImpl {
                                 .withUpdatedSendMessageEffect(nextState.sendMessageEffect)
                         }
                     })
+                    // A committed transfer is an intentional caret move, even when both
+                    // cards have equal text. Ordinary layout echoes keep their own guard.
+                    participant.chatDisplayNode.textInputPanelNode?.richTextInputNode?.restoreInputContent(
+                        nextState.composeInputState.content, selection: nextState.composeInputState.selection)
                 }
                 DraftPocketControllerRegistry.unlock(participants)
                 let animateTransfer = { [weak self, weak panel] in
@@ -251,6 +260,14 @@ extension ChatControllerImpl {
     private func mutateDraftPocket(_ operation: DraftPocketOperation, completion: @escaping () -> Void) {
         guard !self.draftPocketOperationInProgress, let view = self.draftPocketView, view.error == nil,
               let peerId = self.chatLocation.peerId else { return }
+        // A persisted recovery row and the transient Undo overlay can both resolve the
+        // same deletion. A late overlay callback must not report a spurious failure.
+        switch operation {
+        case let .undoDelete(id), let .finalizeDelete(id):
+            guard view.deletedItems.contains(where: { $0.id == id }) else { return }
+        default:
+            break
+        }
         let threadId = self.chatLocation.threadId
         self.draftPocketOperationInProgress = true
         self.updateDraftPocketPresentation()
@@ -300,7 +317,7 @@ private enum DraftPocketControllerRegistry {
         }
     }
 
-    static func lock(_ owner: ChatControllerImpl, captured: ChatInterfaceState) -> [ChatControllerImpl]? {
+    static func lock(_ owner: ChatControllerImpl, captured: ChatInterfaceState, restoring inputToRestore: ChatTextInputState) -> [ChatControllerImpl]? {
         assert(Thread.isMainThread)
         self.register(owner)
         let participants = self.controllers.compactMap { $0.value }.filter {
@@ -311,6 +328,8 @@ private enum DraftPocketControllerRegistry {
             let input = controller.chatDisplayNode.textInputPanelNode?.inputTextState ?? state.composeInputState
             guard !controller.draftPocketOperationInProgress,
                   controller.chatDisplayNode.textInputPanelNode?.draftPocketHasMarkedText != true,
+                  (input.isEmpty && state.replyMessageSubject == nil) || controller.chatDisplayNode.textInputPanelNode?.richTextInputNode?.supportsExactInputSelection != false,
+                  controller.chatDisplayNode.textInputPanelNode?.richTextInputNode?.canRestoreInputSelection(inputToRestore.selection, in: inputToRestore.content) != false,
                   state.editMessage == nil, state.mediaDraftState == nil,
                   input == captured.composeInputState,
                   state.replyMessageSubject == captured.replyMessageSubject,

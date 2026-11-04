@@ -10,7 +10,7 @@ No video or poster is published. [Capture status](Media/README.md) and [handoff]
 
 ## The interaction
 
-You are writing a long formatted message when Alex asks a quick question. Open Draft Pocket, use **Put Aside**, send the short answer, then restore your original draft. If the composer already contains another draft, restoring swaps it into the pocket. Delete offers Undo.
+You are writing a long formatted message when a quick question arrives. Open Draft Pocket, use **Put Aside**, send the short answer, then restore your original draft. If the composer already contains another draft, restoring swaps it into the pocket. Delete offers Undo. The optional demo uses a fictional `@wizardloop` conversation, with local enqueue only and no network delivery.
 
 ## Implemented source and current limits
 
@@ -19,13 +19,15 @@ You are writing a long formatted message when Alex asks a quick question. Open D
 - Canonical rich content, structural selection, custom-emoji file metadata, reply/quote and local composer-state persistence.
 - Native composer entry and list, local English/Hebrew strings, accessibility labels, theme and Reduce Motion handling.
 
-**Media-containing drafts are currently refused without clearing the composer.** Durable media-byte ownership is not implemented. Full-client offline demo, native build/runtime validation and visual QA remain outstanding. See [limitations](docs/LIMITATIONS.md).
+**Media-containing drafts are currently refused without clearing the composer.** Durable media-byte ownership is not implemented. The full-client offline fixture and supported XCTest scenario are prepared; native build/runtime validation and visual QA remain outstanding. See [limitations](docs/LIMITATIONS.md).
 
 Pocket cards remain on this device; the active draft uses Telegram's existing synchronization. No server API or Pocket cloud sync is added. Secret Chats, sent-message editing, unfinished recordings and independent forms are excluded.
 
 ## Repository contents
 
 `submodules/` contains only new native source/tests in their upstream target paths. `Integration/telegram-ios.patch` contains edits to existing upstream files. `Integration/BASE.json` and `files.json` pin the base and hashes. Scripts reconstruct and verify an independent local client checkout. The full Telegram client and its history are not included.
+
+`Demo/Overlay` and `Integration/demo.patch` supply the separate debug Simulator fixture. The demo drives the same chat controller, Pocket transactions and UI as normal use. It never seeds Pocket cards or acknowledges fictitious network delivery.
 
 ## Quick start
 

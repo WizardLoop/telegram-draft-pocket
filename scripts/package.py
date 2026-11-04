@@ -16,6 +16,22 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parent.parent
+FEATURE_NATIVE_SOURCES = {"Tests/ComposerHarness/Tests/HarnessDraftPocketSelectionTests.swift"}
+
+
+def feature_source_allowed(path):
+    return path.startswith("submodules/") or path in FEATURE_NATIVE_SOURCES
+
+
+def native_test_spec(entry):
+    target = entry if isinstance(entry, str) else entry.get("target") if isinstance(entry, dict) else None
+    selection = entry.get("filter") if isinstance(entry, dict) else None
+    if not isinstance(target, str) or not re.fullmatch(r"//[A-Za-z0-9_./+-]+:[A-Za-z0-9_.+-]+", target):
+        raise PackageError("Invalid native test target in BASE.json")
+    if isinstance(entry, dict) and (set(entry) != {"target", "filter"} or not isinstance(selection, str)
+                                   or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*(?:/[A-Za-z_][A-Za-z0-9_]*)?", selection)):
+        raise PackageError("Invalid native XCTest class/method filter in BASE.json")
+    return target, selection
 
 
 class PackageError(Exception):
@@ -96,6 +112,11 @@ def base_config(root):
         raise PackageError("BASE.json must have schema_version 1 and a full commit SHA")
     if base.get("upstream_url") != "https://github.com/TelegramMessenger/Telegram-iOS.git":
         raise PackageError("Unexpected upstream URL; only the documented read-only upstream is supported")
+    targets = base.get("native_test_targets", [])
+    if not isinstance(targets, list):
+        raise PackageError("native_test_targets must be a list")
+    for entry in targets:
+        native_test_spec(entry)
     return base
 
 
@@ -127,9 +148,9 @@ def patch_targets(data):
     return targets
 
 
-def validate_package(root, with_demo=False):
+def validate_package(root, with_demo=False, manifest_override=None):
     base = base_config(root)
-    manifest = load_json(root / "Integration/files.json")
+    manifest = manifest_override if manifest_override is not None else load_json(root / "Integration/files.json")
     if manifest.get("schema_version") != 1 or manifest.get("base_commit") != base["commit"]:
         raise PackageError("Manifest schema/base does not match BASE.json")
     seen_sources = set()
@@ -142,13 +163,14 @@ def validate_package(root, with_demo=False):
             spelling = target_spellings.setdefault(target.casefold(), target)
             if spelling != target:
                 raise PackageError("Target paths collide on a case-insensitive filesystem")
-            expected_prefix = "Demo/Overlay/" if index else "submodules/"
-            if not source.startswith(expected_prefix):
-                raise PackageError(f"Overlay source must be under {expected_prefix}: {source}")
+            if (index and not source.startswith("Demo/Overlay/")) or (not index and not feature_source_allowed(source)):
+                raise PackageError(f"Overlay source is outside the explicit feature/demo source locations: {source}")
             if entry.get("action") != "copy" or source in seen_sources or target in seen_new:
                 raise PackageError("Invalid or duplicated overlay entry")
             if index == 0 and source != target:
                 raise PackageError("Feature overlays must use the exact upstream target path")
+            if index and source != "Demo/Overlay/" + target:
+                raise PackageError("Demo overlays must map their relative path to the same upstream path")
             check_hash(bounded(root, source), entry["sha256"])
             this_targets.add(target)
             seen_sources.add(source)
@@ -182,7 +204,7 @@ def validate_package(root, with_demo=False):
             raise PackageError("Requested package section contains no implementation")
     # Inventory checks prevent a new source being left out of the manifest.
     actual_sources = set()
-    for folder in ("submodules", "Demo/Overlay") if with_demo else ("submodules",):
+    for folder in ("submodules", "Tests/ComposerHarness", "Demo/Overlay") if with_demo else ("submodules", "Tests/ComposerHarness"):
         directory = root / folder
         if directory.exists():
             for path in directory.rglob("*"):
@@ -232,8 +254,9 @@ def prepare(root, checkout, with_demo=False, require_clean=False):
     verify_head(checkout, base)
     expected = all_expected(manifest, with_demo)
     if not require_clean and is_applied(checkout, expected):
-        return manifest, True
-    if changed_paths(checkout):
+        return manifest, True, False
+    feature_applied = with_demo and not require_clean and is_applied(checkout, all_expected(manifest))
+    if changed_paths(checkout) and not feature_applied:
         raise PackageError("Checkout is dirty or partially applied; no files changed. Use a fresh checkout")
     # Rehearse the full ordered application against only the affected base files.
     # This directory is disposable; the user's checkout is untouched during preflight.
@@ -243,7 +266,12 @@ def prepare(root, checkout, with_demo=False, require_clean=False):
         # inside another worktree. Explicit LF handling defeats host autocrlf.
         run(["git", "-c", "core.autocrlf=false", "init", "--quiet"], cwd=scratch)
         git(scratch, "config", "core.autocrlf", "false")
-        for section in sections(manifest, with_demo):
+        if feature_applied:
+            for path in all_expected(manifest):
+                staged = bounded(scratch, path)
+                staged.parent.mkdir(parents=True, exist_ok=True)
+                staged.write_bytes(bounded(checkout, path).read_bytes())
+        for section in sections(manifest, with_demo)[1 if feature_applied else 0:]:
             for entry in section.get("files", []):
                 destination = bounded(checkout, entry["target"])
                 if destination.exists():
@@ -270,17 +298,17 @@ def prepare(root, checkout, with_demo=False, require_clean=False):
                     check_hash(bounded(scratch, entry["target"]), entry["after_sha256"])
         for path, sha in expected.items():
             check_hash(bounded(scratch, path), sha)
-    return manifest, False
+    return manifest, False, feature_applied
 
 
 def apply(root, checkout, with_demo=False, require_clean=False):
-    manifest, already = prepare(root, checkout, with_demo, require_clean)
+    manifest, already, feature_applied = prepare(root, checkout, with_demo, require_clean)
     if already:
         print("Already applied: every target hash and the complete changed-file inventory verified.")
         return
     # All checks complete before the first write. I/O failures remain failures and are
     # never treated as an applied package; do not reset/clean a partially written tree.
-    for section in sections(manifest, with_demo):
+    for section in sections(manifest, with_demo)[1 if feature_applied else 0:]:
         for entry in section.get("files", []):
             destination = bounded(checkout, entry["target"])
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -308,13 +336,17 @@ def bootstrap(root, destination, submodules=False):
     git(destination, "checkout", "--detach", "FETCH_HEAD")
     verify_head(destination, base)
     if submodules:
-        git(destination, "submodule", "update", "--init", "--recursive")
+        # No --remote: every checkout remains the commit recorded by its parent.
+        # Stream potentially long downloads so CI does not look idle for minutes.
+        print("Fetching exact pinned submodules with shallow parallel clones.", flush=True)
+        run(["git", "-C", destination, "submodule", "update", "--init", "--checkout",
+             "--recursive", "--depth=1", "--jobs=4"], capture=False)
     print(f"Prepared upstream commit {base['commit']}. Submodules initialized: {submodules}.")
     if platform.system() != "Darwin":
         print("Build prerequisite missing: macOS and the pinned Xcode. Packaging checks are available here.")
 
 
-def export(root, checkout, paths_file):
+def export(root, checkout, paths_file, invalidate_demo=False):
     base = base_config(root)
     verify_head(checkout, base)
     paths = load_json(paths_file)
@@ -332,8 +364,8 @@ def export(root, checkout, paths_file):
         raise PackageError("Integration changes differ from the explicit export allowlist: " +
                            ", ".join(sorted(changed_paths(checkout) ^ set(new + modified))))
     tracked = set(git(checkout, "ls-tree", "-r", "--name-only", base["commit"]).decode("utf-8").splitlines())
-    if any(path in tracked or not path.startswith("submodules/") for path in new):
-        raise PackageError("New feature files must be untracked paths under submodules/")
+    if any(path in tracked or not feature_source_allowed(path) for path in new):
+        raise PackageError("New feature files must be untracked paths in an explicitly allowed source location")
     if any(path not in tracked for path in modified):
         raise PackageError("Modified feature files must exist at the pinned base")
     copied = []
@@ -357,17 +389,20 @@ def export(root, checkout, paths_file):
     manifest = {"schema_version": 1, "base_commit": base["commit"], "feature": feature,
                 "demo": {"available": False, "reason": "No isolated full-client offline bootstrap has been implemented or validated."}}
     existing_manifest = root / "Integration/files.json"
-    if existing_manifest.exists() and load_json(existing_manifest).get("demo", {}).get("available"):
+    if existing_manifest.exists() and load_json(existing_manifest).get("demo", {}).get("available") and not invalidate_demo:
         raise PackageError("Demo export requires a separately reviewed feature/demo commit boundary; refusing to overwrite it")
+    if invalidate_demo:
+        manifest["demo"] = {"available": False, "reason": "Feature was re-exported. Revalidate demo input hashes and run export-demo before applying or building the demo."}
     # Preflight every destination before writing any export artifact.
     for path in [*payloads, "Integration/telegram-ios.patch", "Integration/files.json"]:
         bounded(root, path)
     actual_overlay = set()
-    for path in (root / "submodules").rglob("*"):
-        if path.is_symlink() or getattr(path, "is_junction", lambda: False)():
-            raise PackageError("Existing overlay contains a link; export did not change it")
-        if path.is_file():
-            actual_overlay.add(path.relative_to(root).as_posix())
+    for folder in ("submodules", "Tests/ComposerHarness"):
+        for path in (root / folder).rglob("*"):
+            if path.is_symlink() or getattr(path, "is_junction", lambda: False)():
+                raise PackageError("Existing overlay contains a link; export did not change it")
+            if path.is_file():
+                actual_overlay.add(path.relative_to(root).as_posix())
     if actual_overlay - set(new):
         raise PackageError("Export would leave stale overlay files; review the allowlist first")
     if not patch_data and (root / "Integration/telegram-ios.patch").exists():
@@ -384,11 +419,72 @@ def export(root, checkout, paths_file):
     print(f"Exported {len(new)} new files and {len(modified)} modified files from the integration tree.")
 
 
-def toolchain(root, checkout, configuration):
+def export_demo(root, reference, paths_file):
+    """Seal a separately authored demo patch against the exact feature package.
+
+    Demo source/patch artifacts are authored independently. Only the manifest is
+    written here, after all input hashes and ordered application have passed.
+    """
     base, manifest = validate_package(root)
+    verify_head(reference, base)
+    if not is_applied(reference, all_expected(manifest)):
+        raise PackageError("Demo export requires an exact feature-only reference checkout")
+    paths = load_json(paths_file)
+    if paths.get("schema_version") != 1:
+        raise PackageError("Demo export path list must have schema_version 1")
+    new = [relative(p) for p in paths.get("demo_new", [])]
+    modified = [relative(p) for p in paths.get("demo_modified", [])]
+    if not new or not modified or len({p.casefold() for p in new + modified}) != len(new + modified):
+        raise PackageError("Demo export needs unique new and modified paths")
+    before_hashes = paths.get("feature_sha256", {})
+    if set(before_hashes) != set(modified):
+        raise PackageError("Demo export requires exact feature input hashes for every modified target")
+    patch_path = bounded(root, "Integration/demo.patch")
+    patch_data = patch_path.read_bytes()
+    if set(patch_targets(patch_data)) != set(modified):
+        raise PackageError("Demo patch differs from its explicit export allowlist")
+    feature_expected = all_expected(manifest)
+    copied, changes = [], []
+    with tempfile.TemporaryDirectory(prefix="draft-pocket-demo-export-") as temporary:
+        scratch = Path(temporary)
+        run(["git", "-c", "core.autocrlf=false", "init", "--quiet"], cwd=scratch)
+        for path in modified:
+            # Base blobs provide canonical LF bytes even on a Windows host.
+            original = (bounded(reference, path).read_bytes() if path in feature_expected else
+                        git(reference, "show", f"{base['commit']}:{path}"))
+            if digest(original) != before_hashes[path]:
+                raise PackageError(f"Demo was authored against a stale feature input: {path}")
+            target = bounded(scratch, path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(original)
+        for path in new:
+            if path in feature_expected or git(reference, "ls-files", "--", path).strip():
+                raise PackageError(f"Demo new-file collision: {path}")
+            source = "Demo/Overlay/" + path
+            payload = bounded(root, source).read_bytes()
+            target = bounded(scratch, path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(payload)
+            copied.append({"action": "copy", "source": source, "target": path, "sha256": digest(payload)})
+        run(["git", "-c", "core.autocrlf=false", "apply", "--check", "--whitespace=error", patch_path], cwd=scratch)
+        run(["git", "-c", "core.autocrlf=false", "apply", "--whitespace=error", patch_path], cwd=scratch)
+        for path in modified:
+            changes.append({"action": "modify", "target": path, "before_sha256": before_hashes[path],
+                            "after_sha256": digest(bounded(scratch, path).read_bytes())})
+    manifest["demo"] = {"available": True, "files": copied,
+                        "patch": {"source": "Integration/demo.patch", "sha256": digest(patch_data), "files": changes},
+                        "native_test_target": "//Tests/DraftPocketDemo:DraftPocketDemoUITests",
+                        "device_type": "iPhone 17", "os_version": "27.0"}
+    validate_package(root, with_demo=True, manifest_override=manifest)
+    bounded(root, "Integration/files.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8", newline="\n")
+    print(f"Exported demo: {len(new)} new and {len(modified)} modified files. Native demo NOT RUN.")
+
+
+def toolchain(root, checkout, configuration, with_demo=False):
+    base, manifest = validate_package(root, with_demo)
     verify_head(checkout, base)
-    if not is_applied(checkout, all_expected(manifest)):
-        raise PackageError("Build/test requires the exactly reconstructed feature package")
+    if not is_applied(checkout, all_expected(manifest, with_demo)):
+        raise PackageError("Build/test requires the exactly reconstructed requested package")
     if platform.system() != "Darwin":
         raise PackageError("iOS build/native tests require macOS and Xcode; this is not an iOS validation")
     if platform.machine() != "arm64":
@@ -474,17 +570,24 @@ def main(argv=None):
     exp = sub.add_parser("export", help="Export only explicitly allowlisted integration changes")
     exp.add_argument("checkout", type=Path)
     exp.add_argument("--paths", type=Path, default=ROOT / "Integration/export-paths.json")
-    sub.add_parser("verify", help="Verify package source hashes and manifest inventory without an upstream checkout")
+    exp.add_argument("--invalidate-demo", action="store_true", help="Explicitly invalidate only generated demo manifest state after feature export preflight; retain all authored demo source/patch files")
+    demo = sub.add_parser("export-demo", help="Seal the separately authored demo against an exact feature reference")
+    demo.add_argument("--reference", type=Path, required=True)
+    demo.add_argument("--paths", type=Path, default=ROOT / "Integration/demo-export-paths.json")
+    verify = sub.add_parser("verify", help="Verify package source hashes and manifest inventory without an upstream checkout")
+    verify.add_argument("--with-demo", action="store_true")
     build = sub.add_parser("build", help="Build the reconstructed iOS Simulator client through upstream Make.py")
     build.add_argument("checkout", type=Path)
     build.add_argument("--configuration", type=Path, required=True)
     build.add_argument("--cache", type=Path, required=True)
     build.add_argument("--build-number", type=int, required=True, help="Use a new build number for every installed build")
+    build.add_argument("--with-demo", action="store_true")
     test = sub.add_parser("test", help="Run packaging tests; optionally run the real native feature targets")
     test.add_argument("--native", action="store_true")
     test.add_argument("--checkout", type=Path)
     test.add_argument("--configuration", type=Path)
     test.add_argument("--cache", type=Path)
+    test.add_argument("--with-demo", action="store_true")
     args = parser.parse_args(argv)
     if hasattr(args, "checkout") and args.checkout and args.command != "bootstrap":
         args.checkout = args.checkout.resolve()
@@ -498,12 +601,14 @@ def main(argv=None):
                 check_hash(bounded(args.reference, path), sha)
             print("Reconstruction matches every development source hash.")
     elif args.command == "export":
-        export(ROOT, args.checkout, args.paths)
+        export(ROOT, args.checkout, args.paths, args.invalidate_demo)
+    elif args.command == "export-demo":
+        export_demo(ROOT, args.reference.resolve(), args.paths)
     elif args.command == "verify":
-        validate_package(ROOT)
+        validate_package(ROOT, args.with_demo)
         print("Manifest/source hashes verified. iOS build/runtime NOT RUN.")
     elif args.command == "build":
-        toolchain(ROOT, args.checkout, args.configuration)
+        toolchain(ROOT, args.checkout, args.configuration, args.with_demo)
         if args.build_number <= 0:
             raise PackageError("Build number must be positive")
         command = make_command(args.checkout, args.configuration.resolve(), args.cache.resolve(), "build")
@@ -513,16 +618,18 @@ def main(argv=None):
         result = unittest.TextTestRunner(verbosity=2).run(suite)
         if not result.wasSuccessful() or not result.testsRun:
             raise PackageError("Packaging tests failed or no tests ran")
-        validate_package(ROOT)
+        validate_package(ROOT, args.with_demo)
         if args.native:
             if not args.checkout or not args.cache:
                 raise PackageError("Native tests require --checkout, --configuration and --cache")
-            base = toolchain(ROOT, args.checkout, args.configuration)
+            base = toolchain(ROOT, args.checkout, args.configuration, args.with_demo)
             targets = base.get("native_test_targets", [])
             if not targets:
                 raise PackageError("No native feature test targets are registered in BASE.json")
-            for target in targets:
-                run(make_command(args.checkout, args.configuration.resolve(), args.cache.resolve(), "test") + ["--target", target], cwd=args.checkout, capture=False)
+            for entry in targets:
+                target, selection = native_test_spec(entry)
+                selection_args = ["--testFilter", selection] if selection else []
+                run(make_command(args.checkout, args.configuration.resolve(), args.cache.resolve(), "test") + ["--target", target, *selection_args], cwd=args.checkout, capture=False)
         else:
             print("Packaging tests PASS. Native feature tests, iOS build, UI/runtime and capture NOT RUN.")
 

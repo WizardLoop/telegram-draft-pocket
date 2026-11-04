@@ -2,6 +2,8 @@
 
 Status: implementation draft; no approved production capture.
 
+The user selected a fictional `@wizardloop` conversation for the main demo. Keep the fixture visibly labelled offline and synthetic. It must run the production chat controller, composer and Pocket storage in a dedicated local account; it must not resolve the real username or connect to a real account.
+
 - Repository: https://github.com/WizardLoop/telegram-draft-pocket
 - Source branch: https://github.com/WizardLoop/telegram-draft-pocket/tree/feature/draft-pocket
 - Draft PR: https://github.com/WizardLoop/telegram-draft-pocket/pull/1
@@ -18,7 +20,7 @@ Follow [integration](../Integration/README.md), [testing](TESTING.md), [CI](CI.m
 
 | Approximate edit time | Action |
 |---|---|
-| 0–6 s | Alex chat and long formatted draft, fictional context |
+| 0–6 s | Fictional `@wizardloop` chat and long formatted draft |
 | 6–10 s | Incoming quick question, Put Aside through the actual control |
 | 10–16 s | Short answer typed and sent through the real composer |
 | 16–23 s | Pocket opens showing two separately saved cards |

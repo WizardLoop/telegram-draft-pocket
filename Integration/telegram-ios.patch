@@ -27,11 +27,65 @@ index 242e45b324266c6113edb7ccc21cb11152b6873f..c061f4e535f47bceca2ddc4cd67bee11
 +"DraftPocket.PendingDelete" = "Deleted drafts awaiting confirmation";
 +"DraftPocket.MediaUnavailable" = "Media drafts cannot be put aside in this build. Your draft is unchanged.";
 +"DraftPocket.StorageUnavailable" = "Draft Pocket could not be read. Stored drafts have not been changed.";
+diff --git a/Tests/ComposerHarness/BUILD b/Tests/ComposerHarness/BUILD
+index 7a8590d5d3cfa96dde5c8a7151d15128a4fbc144..bcaa87b7e7b2af870bb6c09d89327cd3503c5f17 100644
+--- a/Tests/ComposerHarness/BUILD
++++ b/Tests/ComposerHarness/BUILD
+@@ -212,12 +212,15 @@ swift_library(
+         "//submodules/AccountContext",
+         # `ChatRichTextInputNode` / `ChatRichTextFormatAction`, for the engine regression tests.
+         "//submodules/TelegramUI/Components/Chat/ChatInputTextNode",
++        "//submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer",
+         # `chatComposerInsertTextOnUsersBehalf` / `chatComposerInsertMention`: the chat's inserts on the
+         # user's behalf, called as the chat calls them (`HarnessChatInserts`).
+         "//submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode",
+         # `@testable`, for the fuzz test: it asks the engine's own presentation / derived-view
+         # verifiers after every step instead of letting them trap the test process.
+         "//submodules/TelegramUI/Components/RichTextEditor:RichTextEngineEditor",
++        # Draft Pocket verifies the native UITextPosition affinity after restoration.
++        "//submodules/TelegramUI/Components/RichTextEditor:RichTextInputDecUpstream",
+         # `Document` / `RichTextEditorClipboard`, for the drag-and-drop tests' fragments.
+         "//submodules/TelegramUI/Components/RichTextEditor:RichTextEditorCore",
+         "//submodules/TelegramUI/Components/RichTextEditor:RichTextEditorUIKit",
+@@ -238,6 +241,25 @@ ios_unit_test(
+     visibility = ["//Tests:__subpackages__"],
+ )
+ 
++# Draft Pocket's real composer selection regression lane. Uses a fresh simulator and no pre-action
++# that uninstalls apps on existing simulators. Filter class HarnessDraftPocketSelectionTests when
++# running this lane; the shared library also carries the existing harness regression controls.
++ios_test_runner(
++    name = "DraftPocketSelectionTestRunner",
++    device_type = "iPhone 17",
++    os_version = "27.0",
++)
++
++ios_unit_test(
++    name = "DraftPocketSelectionHarnessTests",
++    linkopts = ["-framework", "MediaPlayer"],
++    minimum_os_version = "15.0",
++    runner = ":DraftPocketSelectionTestRunner",
++    test_host = ":ComposerHarness",
++    deps = [":ComposerHarnessTestsLib"],
++    visibility = ["//visibility:public"],
++)
++
+ swift_library(
+     name = "ComposerHarnessUITestsLib",
+     testonly = True,
 diff --git a/build-system/Make/Make.py b/build-system/Make/Make.py
-index 4c3a64199fab8af21e55dea47b3b7deb0eb1f64f..c6a38597c5773ad656787655572a24876fe6afda 100644
+index 4c3a64199fab8af21e55dea47b3b7deb0eb1f64f..e62cb4a964503706d94fb05ec3f536893ea0e834 100644
 --- a/build-system/Make/Make.py
 +++ b/build-system/Make/Make.py
-@@ -141,6 +141,8 @@ class BazelCommandLine:
+@@ -8,6 +8,7 @@ import tempfile
+ import subprocess
+ import shutil
+ import glob
++import uuid
+ 
+ from BuildEnvironment import resolve_executable, call_executable, run_executable_with_output, BuildEnvironmentVersions, BuildEnvironment
+ from ProjectGeneration import generate
+@@ -141,6 +142,8 @@ class BazelCommandLine:
  
      def set_disable_provisioning_profiles(self):
          self.disable_provisioning_profiles = True
@@ -40,7 +94,31 @@ index 4c3a64199fab8af21e55dea47b3b7deb0eb1f64f..c6a38597c5773ad656787655572a2487
  
      def set_profile_swift(self, value):
          self.profile_swift = value
-@@ -338,6 +340,9 @@ class BazelCommandLine:
+@@ -326,18 +329,28 @@ class BazelCommandLine:
+         print(subprocess.list2cmdline(combined_arguments))
+         call_executable(combined_arguments)
+ 
+-    def invoke_test(self, test_target='Tests/AllTests'):
++    def invoke_test(self, test_target='Tests/AllTests', simulator_udid=None, build_only=False, test_filter=None):
+         combined_arguments = [
+             self.build_environment.bazel_path
+         ]
+         combined_arguments += self.get_startup_bazel_arguments()
+-        combined_arguments += ['test']
+-
+-        combined_arguments += ['--cache_test_results=no']
+-        combined_arguments += ['--test_output=errors']
++        combined_arguments += ['build' if build_only else 'test']
++
++        if not build_only:
++            combined_arguments += ['--cache_test_results=no']
++            combined_arguments += ['--test_output=all' if simulator_udid else '--test_output=errors']
++        if simulator_udid is not None and not build_only:
++            # The pinned rules_apple runner supports this public destination flag.
++            simulator_udid = str(uuid.UUID(simulator_udid))
++            combined_arguments += ['--test_arg=--destination=platform=ios_simulator,id=' + simulator_udid]
++        if test_filter is not None and not build_only:
++            combined_arguments += ['--test_filter=' + test_filter]
  
          combined_arguments += [test_target]
  
@@ -50,7 +128,7 @@ index 4c3a64199fab8af21e55dea47b3b7deb0eb1f64f..c6a38597c5773ad656787655572a2487
          combined_arguments += self.common_args
          combined_arguments += self.common_build_args
          combined_arguments += self.get_define_arguments()
-@@ -605,6 +610,9 @@ def resolve_watch_provisioning_profile(arguments, base_path):
+@@ -605,6 +618,9 @@ def resolve_watch_provisioning_profile(arguments, base_path):
  
  
  def build(bazel, arguments):
@@ -60,7 +138,7 @@ index 4c3a64199fab8af21e55dea47b3b7deb0eb1f64f..c6a38597c5773ad656787655572a2487
      if PostboxImportCheck.run(os.getcwd()) != 0:
          sys.exit(1)
  
-@@ -631,6 +639,8 @@ def build(bazel, arguments):
+@@ -631,6 +647,8 @@ def build(bazel, arguments):
      )
  
      bazel_command_line.set_configuration(arguments.configuration)
@@ -69,7 +147,7 @@ index 4c3a64199fab8af21e55dea47b3b7deb0eb1f64f..c6a38597c5773ad656787655572a2487
      if arguments.embedWatchApp:
          if arguments.configuration in ('debug_arm64', 'release_arm64'):
              if arguments.watchApiId is None or arguments.watchApiHash is None:
-@@ -713,6 +723,8 @@ def test(bazel, arguments):
+@@ -713,9 +731,12 @@ def test(bazel, arguments):
      )
  
      bazel_command_line.set_configuration('debug_sim_arm64')
@@ -77,11 +155,25 @@ index 4c3a64199fab8af21e55dea47b3b7deb0eb1f64f..c6a38597c5773ad656787655572a2487
 +        bazel_command_line.set_disable_provisioning_profiles()
      bazel_command_line.set_build_number('10000')
  
-     bazel_command_line.invoke_test(test_target=arguments.target)
-@@ -947,6 +959,12 @@ if __name__ == '__main__':
+-    bazel_command_line.invoke_test(test_target=arguments.target)
++    bazel_command_line.invoke_test(test_target=arguments.target, simulator_udid=arguments.simulatorUDID,
++                                  build_only=arguments.buildOnly, test_filter=arguments.testFilter)
+ 
+ 
+ def query(bazel, arguments):
+@@ -947,6 +968,21 @@ if __name__ == '__main__':
              '''
      )
      add_project_and_build_common_arguments(testParser)
++    testParser.add_argument(
++        '--simulatorUDID',
++        type=lambda value: str(uuid.UUID(value)),
++        help='Run on this existing dedicated Simulator UUID (public rules_apple destination).'
++    )
++    testParser.add_argument('--buildOnly', action='store_true', default=False,
++                           help='Build the exact test target/configuration without executing tests.')
++    testParser.add_argument('--testFilter', type=str,
++                           help='Forward an XCTest test selection through the pinned runner.')
 +    testParser.add_argument(
 +        '--disableProvisioningProfiles',
 +        action='store_true',
@@ -91,7 +183,7 @@ index 4c3a64199fab8af21e55dea47b3b7deb0eb1f64f..c6a38597c5773ad656787655572a2487
      testParser.add_argument(
          '--target',
          type=str,
-@@ -1025,6 +1043,12 @@ if __name__ == '__main__':
+@@ -1025,6 +1061,12 @@ if __name__ == '__main__':
          metavar='number'
      )
      add_project_and_build_common_arguments(buildParser)
@@ -263,6 +355,108 @@ index dfa4676117b644f1d036a7375656ce2f715b3ff0..0d372835c62281af724e1e4b27002ba0
      /// Rebuilds every block with its runs transformed. The `switch` is EXHAUSTIVE (no `default`) on
      /// purpose: a new `ChatInputBlock` case must state where its runs live, rather than silently
      /// carrying emoji that never resolve.
+diff --git a/submodules/TelegramCore/Sources/ChatInputContent/ChatInputContentModel.swift b/submodules/TelegramCore/Sources/ChatInputContent/ChatInputContentModel.swift
+index 37b78ddaef33b82d142e865f58886daabb2a7c46..dff1578c12e1a60dd11c67dea557563618d33f7c 100644
+--- a/submodules/TelegramCore/Sources/ChatInputContent/ChatInputContentModel.swift
++++ b/submodules/TelegramCore/Sources/ChatInputContent/ChatInputContentModel.swift
+@@ -1123,7 +1123,9 @@ public struct ChatInputTable: Equatable, Codable {
+ }
+ 
+ /// One step descending the block tree: pick a block at this level, then which of its nested-content slots to
+-/// descend into. `slot` is unused at the LEAF step (a text block has no nested content) — 0 by convention.
++/// descend into. The native composer uses slot 0 for primary text / container children, slot 1 for
++/// secondary text (language, author, title). A table step uses its row index as slot, followed by
++/// a terminal step whose blockIndex is the cell index within that row and whose slot is 0.
+ public struct ChatInputPathStep: Equatable {
+     public var blockIndex: Int
+     public var slot: Int
+@@ -1134,14 +1136,22 @@ public struct ChatInputPathStep: Equatable {
+ }
+ 
+ /// A caret position: a non-empty path of `(blockIndex, slot)` steps through the (possibly nested) block tree to
+-/// a UTF-16 `offset` within the addressed text-leaf block. Today the editor produces only depth-1 paths (the
+-/// flat string contains only top-level, unfolded content); deeper paths are reserved for future nested editing.
++/// a UTF-16 `offset` within the addressed text region. The native composer produces nested paths;
++/// flat-only consumers use `flatOffset` as a projection, never as a structural restore operation.
++public enum ChatInputPositionAffinity: Int32 {
++    case upstream = 0
++    case downstream = 1
++}
++
+ public struct ChatInputPosition: Equatable {
+     public var path: [ChatInputPathStep]
+     public var offset: Int
+-    public init(path: [ChatInputPathStep], offset: Int) {
++    /// nil is the backward-compatible default for drafts written before visual affinity was stored.
++    public var affinity: ChatInputPositionAffinity?
++    public init(path: [ChatInputPathStep], offset: Int, affinity: ChatInputPositionAffinity? = nil) {
+         self.path = path
+         self.offset = offset
++        self.affinity = affinity
+     }
+ }
+ 
+@@ -1152,7 +1162,7 @@ public struct ChatInputSelection: Equatable {
+         self.start = start
+         self.end = end
+     }
+-    public var isCollapsed: Bool { start == end }
++    public var isCollapsed: Bool { start.path == end.path && start.offset == end.offset }
+ }
+ 
+ public extension ChatInputContent {
+@@ -1190,15 +1200,17 @@ public extension ChatInputContent {
+         }
+     }
+ 
+-    /// Map a structural position to a flat UTF-16 offset into `plainText`. Only depth-1 positions (the editing
+-    /// surface today) round-trip exactly; a deeper path (into not-yet-unfolded nested content, which has no flat
+-    /// representation) clamps to the addressed top-level block's start. Off-axis (`.media`/`.table`) blocks
+-    /// contribute neither length nor a separator, so the flat space matches `plainText` exactly; a position that
+-    /// addresses an off-axis block (defensive — the editor never selects into one) clamps to that boundary.
++    /// Project a structural position onto `plainText`. Expanded quote children participate recursively.
++    /// Tables, details, media and secondary text regions are off this axis: their caret projects to
++    /// the end, matching the native editor's composerSelectedRange. Keep the structural value to restore it.
+     func flatOffset(for position: ChatInputPosition) -> Int {
+         guard let first = position.path.first else {
+             return 0
+         }
++        if position.path.count > 1 || first.slot != 0
++            || (self.blocks.indices.contains(first.blockIndex) && !self.blockIsFlatParticipating(self.blocks[first.blockIndex])) {
++            return self.flatOffsetForStructuralPosition(position) ?? (self.plainText as NSString).length
++        }
+         let count = self.blocks.count
+         if count == 0 {
+             return 0
+@@ -1228,6 +1240,28 @@ public extension ChatInputContent {
+         return flat
+     }
+ 
++    /// nil propagates an off-axis endpoint through every enclosing quote, so it projects to the
++    /// whole document's end rather than the end of whichever nested quote happened to contain it.
++    private func flatOffsetForStructuralPosition(_ position: ChatInputPosition) -> Int? {
++        guard let first = position.path.first, self.blocks.indices.contains(first.blockIndex), first.slot == 0 else { return nil }
++        let block = self.blocks[first.blockIndex]
++        guard self.blockIsFlatParticipating(block) else { return nil }
++        var prefix = 0
++        var hasEmitted = false
++        for previous in self.blocks.prefix(first.blockIndex) where self.blockIsFlatParticipating(previous) {
++            if hasEmitted { prefix += 1 }
++            prefix += self.blockFlatLength(previous)
++            hasEmitted = true
++        }
++        if hasEmitted { prefix += 1 }
++        if position.path.count == 1 {
++            return prefix + min(max(position.offset, 0), self.blockFlatLength(block))
++        }
++        guard case let .blockQuote(quote) = block, !quote.collapsed,
++              let inner = quote.content.flatOffsetForStructuralPosition(ChatInputPosition(path: Array(position.path.dropFirst()), offset: position.offset)) else { return nil }
++        return prefix + inner
++    }
++
+     /// Map a flat UTF-16 offset (into `plainText`) to a structural position. Always a depth-1 path — the flat
+     /// string only contains top-level, unfolded content. Off-axis (`.media`/`.table`) blocks are skipped (they
+     /// hold no flat position), so an offset never resolves INTO one; offsets straddling an inter-block "\n"
 diff --git a/submodules/TelegramCore/Sources/SyncCore/SyncCore_Namespaces.swift b/submodules/TelegramCore/Sources/SyncCore/SyncCore_Namespaces.swift
 index 50e467d603edb3718f5bddd6cb024a61eca9e910..303ffdfb1b5e404b7bbd44331e6410e4f884236b 100644
 --- a/submodules/TelegramCore/Sources/SyncCore/SyncCore_Namespaces.swift
@@ -316,6 +510,187 @@ index 7cfe8c208fa36a82ee67bd8b00fcec8fb02611c5..20f10d506d63c961a5f1eb19017553c2
          public func setOpaqueChatInterfaceState(peerId: PeerId, threadId: Int64?, state: OpaqueChatInterfaceState) -> Signal<Never, NoError> {
              return self.account.postbox.transaction { transaction -> Void in
                  guard let data = try? AdaptedPostboxEncoder().encode(InternalChatInterfaceState(
+diff --git a/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/ChatRichTextInputNode.swift b/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/ChatRichTextInputNode.swift
+index 87f1a5429faed2a539061708ec86b9ec3d389301..ded215336b36c82af6d56905aebea77f55872b23 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/ChatRichTextInputNode.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/ChatRichTextInputNode.swift
+@@ -379,6 +379,14 @@ public protocol ChatRichTextInputNode: AnyObject {
+     /// The node's content as the canonical `ChatInputContent` model + opaque selection. Default
+     /// implementations bridge through `attributedText`/`selectedRange` + the TextFormat conversion utility.
+     func currentInputContent() -> (content: ChatInputContent, selection: ChatInputSelection)
++
++    /// Whether currentInputContent can preserve the live selection exactly. Destructive transfers
++    /// must check this before capturing: a structural table/atom selection is not a text range.
++    var supportsExactInputSelection: Bool { get }
++    func canRestoreInputSelection(_ selection: ChatInputSelection, in content: ChatInputContent) -> Bool
++    /// Explicit external restoration after a committed transfer. Unlike ordinary state echoes,
++    /// this deliberately restores a caret even when the same body currently has a live range.
++    func restoreInputContent(_ content: ChatInputContent, selection: ChatInputSelection)
+     func setInputContent(_ content: ChatInputContent, selection: ChatInputSelection)
+ 
+     /// Runs `body` — the USER's edit made through the chat rather than the editor: a transform of the
+@@ -450,6 +458,16 @@ public protocol ChatRichTextInputNode: AnyObject {
+ }
+ 
+ public extension ChatRichTextInputNode {
++    var supportsExactInputSelection: Bool { true }
++    func canRestoreInputSelection(_ selection: ChatInputSelection, in content: ChatInputContent) -> Bool {
++        // A plain field cannot accept a native-only card and flatten its structure during restore.
++        guard chatInputContent(from: attributedString(from: content)) == content else { return false }
++        return ChatInputSelection(nsRange: selection.nsRange(in: content), in: content) == selection
++    }
++    func restoreInputContent(_ content: ChatInputContent, selection: ChatInputSelection) {
++        self.setInputContent(content, selection: selection)
++    }
++
+     var inputContentIsEmpty: Bool {
+         return (self.attributedText?.length ?? 0) == 0
+     }
+diff --git a/submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer/BUILD b/submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer/BUILD
+index b98bcaec134ba38bbd539e2f029c61aa8d00463e..fc133c122c7e4c62583ebe6888ee920509204782 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer/BUILD
++++ b/submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer/BUILD
+@@ -86,3 +86,18 @@ ios_unit_test(
+         "//visibility:public",
+     ],
+ )
++
++ios_test_runner(
++    name = "DraftPocketSelectionBridgeTestRunner",
++    device_type = "iPhone 17",
++    os_version = "27.0",
++)
++
++ios_unit_test(
++    name = "DraftPocketSelectionBridgeTests",
++    linkopts = ["-framework", "MediaPlayer"],
++    minimum_os_version = "15.0",
++    runner = ":DraftPocketSelectionBridgeTestRunner",
++    deps = [":ChatRichTextEditorComposerTestsLib"],
++    visibility = ["//visibility:public"],
++)
+diff --git a/submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer/Sources/RichTextEditorChatInputNode.swift b/submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer/Sources/RichTextEditorChatInputNode.swift
+index 7d7964402584c428a8638a7b87c10b7b8509855e..e5ea3a3520946a8e471a3c7e61d27108a3ad9e85 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer/Sources/RichTextEditorChatInputNode.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer/Sources/RichTextEditorChatInputNode.swift
+@@ -523,18 +523,65 @@ public final class RichTextEditorChatInputNode: ASDisplayNode, ChatRichTextInput
+     /// (`chatInputContent(fromDocument:)`), bypassing the lossy `Document → NSAttributedString` hop the default
+     /// protocol implementation (and the legacy `attributedText` getter) take. The resolvers map the editor's
+     /// opaque host keys to concrete chat-layer values: an unresolvable emoji degrades to plain text and an
+-    /// unresolvable medium is dropped (see `resolveEmojiRef`/`resolveMediaID`). The selection rides the editor's
+-    /// flat composer coordinate space (`selectedRange`), mapped into the content's structural selection — the
+-    /// same mapping the default implementation uses.
++    /// unresolvable medium is dropped (see `resolveEmojiRef`/`resolveMediaID`). Text selection is read in
++    /// Document coordinates so table cells and secondary regions never pass through the flat axis.
+     public func currentInputContent() -> (content: ChatInputContent, selection: ChatInputSelection) {
++        let document = self.editorView.document
+         let content = chatInputContent(
+-            fromDocument: self.editorView.document,
++            fromDocument: document,
+             resolveEmoji: { [weak self] emojiRef in self?.resolveEmojiRef(emojiRef) ?? nil },
+             resolveMedia: { [weak self] mediaID in self?.resolveMediaID(mediaID) ?? nil }
+         )
++        if let nativeSelection = self.editorView.documentTextSelection,
++           let selection = chatInputSelection(from: nativeSelection, document: document, content: content) {
++            return (content, selection)
++        }
++        // Flat consumers still need a display range for non-text selections. Transfers must check
++        // supportsExactInputSelection first; this compatibility value is not a persistence claim.
+         return (content, ChatInputSelection(nsRange: self.selectedRange, in: content))
+     }
+ 
++    public var supportsExactInputSelection: Bool {
++        guard let selection = self.editorView.documentTextSelection else { return false }
++        let document = self.editorView.document
++        let content = chatInputContent(fromDocument: document,
++                                       resolveEmoji: { [weak self] in self?.resolveEmojiRef($0) },
++                                       resolveMedia: { [weak self] in self?.resolveMediaID($0) })
++        return chatInputSelection(from: selection, document: document, content: content) != nil
++    }
++
++    public func canRestoreInputSelection(_ selection: ChatInputSelection, in content: ChatInputContent) -> Bool {
++        let document = document(fromChatInputContent: content,
++                                registerEmoji: { id, _ in EmojiRef(id: String(id), instanceID: BlockID.generate().rawValue, altText: nil) },
++                                registerMedia: { _ in "selection-validation" })
++        if let native = documentTextSelection(from: selection, document: document, content: content) {
++            let tree = DocumentTree.build(from: document)
++            guard let start = PositionResolver.globalPosition(of: native.start.ref, offset: native.start.offset, in: tree),
++                  let end = PositionResolver.globalPosition(of: native.end.ref, offset: native.end.offset, in: tree) else { return false }
++            if #available(iOS 18.4, *), self.editorView is RichTextEngineEditorView {
++                guard start <= end else { return false }
++            } else if native.start.affinity == .upstream || native.end.affinity == .upstream {
++                return false
++            }
++            return true
++        }
++        return content.blocks.isEmpty && isLegacyFlatInputSelection(selection, content: content)
++    }
++
++    public func restoreInputContent(_ content: ChatInputContent, selection: ChatInputSelection) {
++        guard self.canRestoreInputSelection(selection, in: content) else { return }
++        self.setInputContent(content, selection: selection)
++        self.restoreInputSelection(selection, content: content)
++    }
++
++    private func restoreInputSelection(_ selection: ChatInputSelection, content: ChatInputContent) {
++        if let native = documentTextSelection(from: selection, document: self.editorView.document, content: content) {
++            _ = self.editorView.setDocumentTextSelection(native)
++        } else if isLegacyFlatInputSelection(selection, content: content) {
++            self.selectedRange = selection.nsRange(in: content)
++        }
++    }
++
+     /// Replace the editor's content from a `ChatInputContent`. This is the chat layer's structural SET path
+     /// (draft restore, send-clear, spoiler re-decorate): it MUST land the structural blocks back into the editor
+     /// `Document`, so we convert STRAIGHT via the direct bridge (`document(fromChatInputContent:)`) rather than
+@@ -544,7 +591,7 @@ public final class RichTextEditorChatInputNode: ASDisplayNode, ChatRichTextInput
+     /// can resolve it back. Sets the editor's live document directly (NOT via `attributedText`, which would
+     /// flatten structure beyond the `ChatTextInputAttributes` vocabulary, e.g. tables) and runs the same refresh
+     /// `onChange` performs (so the panel re-lays-out and re-reads content), preserving the refresh/`didUpdateText`
+-    /// ordering, then restores the flat composer selection.
++    /// ordering, then restores the structural text selection.
+     /// **Whose caret is it?** While the editor has focus, the editor's — and a content-equal
+     /// `setInputContent` may not move it.
+     ///
+@@ -643,10 +690,9 @@ public final class RichTextEditorChatInputNode: ASDisplayNode, ChatRichTextInput
+         // only move the caret if the requested selection actually differs from the live one — so the common
+         // no-op echo (the editor's own edit pushed up and applied back) leaves scroll AND selection
+         // untouched, while a deliberate programmatic caret move still takes effect.
+-        let currentContent = self.currentInputContent().content
++        let current = self.currentInputContent()
++        let currentContent = current.content
+         if currentContent == content {
+-            let targetRange = selection.nsRange(in: content)
+-            let liveRange = self.editorView.composerSelectedRange
+             // STALE-SELECTION GUARD (the double-tap "flash then deselect" fix).
+             //
+             // The editor reports a selection change to the host ASYNCHRONOUSLY (coalesced to the next runloop
+@@ -662,10 +708,12 @@ public final class RichTextEditorChatInputNode: ASDisplayNode, ChatRichTextInput
+             // echo — a real edit changes content (→ the rebuild branch below), and a deliberate caret move goes
+             // through the editor first (so `liveRange` is already that caret). Skip it and keep the live range;
+             // every other move (including the unfocused/programmatic caret set) still applies.
+-            if Self.echoedSelectionShouldApply(target: targetRange,
+-                                               live: liveRange,
+-                                               editorHasFocus: self.editorView.isFirstResponder) {
+-                self.selectedRange = targetRange
++            // The same echo rule on structural endpoints: two distinct off-axis carets can have
++            // an identical flat NSRange, so comparing that range would suppress a real restore.
++            if selection != current.selection,
++               !self.editorView.isEditorFirstResponder,
++               !(selection.isCollapsed && !current.selection.isCollapsed) {
++                self.restoreInputSelection(selection, content: content)
+             }
+             return
+         }
+@@ -702,7 +750,7 @@ public final class RichTextEditorChatInputNode: ASDisplayNode, ChatRichTextInput
+             _ = self.editorView.update(size: self.editorView.bounds.size, insets: self.trackedInsets, contentMargins: self.trackedContentMargins, scrollIndicatorInsets: self.trackedScrollIndicatorInsets)
+         }
+         self.storedDelegate?.chatInputTextNodeDidUpdateText()
+-        self.selectedRange = selection.nsRange(in: content)
++        self.restoreInputSelection(selection, content: content)
+         // A set the editor NORMALISES is reported back, so the chat's copy — what Send reads — is what the
+         // editor shows. BY CONSTRUCTION, not by a list: whenever the read-back after the set differs from the
+         // content set, the editor changed something on the way in — a line break in a one-line field
 diff --git a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
 index ec2bc5949ced102330c2cc1a58a5b4bec1ff3ec1..6ba8b735835db1fa58a1253ecdc66c77db7025bc 100644
 --- a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
@@ -466,6 +841,95 @@ index ec2bc5949ced102330c2cc1a58a5b4bec1ff3ec1..6ba8b735835db1fa58a1253ecdc66c77
          self.attachmentButtonBackground.update(size: attachmentButtonFrame.size, cornerRadius: 40.0 * 0.5, isDark: interfaceState.theme.overallDarkAppearance, tintColor: defaultGlassTintColor, isInteractive: true, transition: ComponentTransition(transition))
  
          transition.updateFrame(layer: self.attachmentButtonBackground.layer, frame: attachmentButtonFrame)
+diff --git a/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEditorUIKit/Canvas/DocumentCanvasView+ComposerSelection.swift b/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEditorUIKit/Canvas/DocumentCanvasView+ComposerSelection.swift
+index 8268fcda8044d46884fefa14248752378b2e8835..49e3554e46e839495ddfd9ce198684098f8d3423 100644
+--- a/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEditorUIKit/Canvas/DocumentCanvasView+ComposerSelection.swift
++++ b/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEditorUIKit/Canvas/DocumentCanvasView+ComposerSelection.swift
+@@ -4,6 +4,43 @@ import RichTextEditorCore
+ 
+ @available(iOS 13.0, *)
+ extension DocumentCanvasView {
++    var documentTextSelection: DocumentTextSelection? {
++        guard tableSelection == nil, imageSelection == nil else { return nil }
++        let tree = DocumentTree.build(from: Document(blocks: currentBlocks()))
++        let selection = canonicalSelection
++        // The legacy backend has no visual-affinity model and emits downstream only. An alternate
++        // backend state that this setter cannot reproduce must not be captured as a lossless draft.
++        guard selection.anchor.affinity == .downstream, selection.head.affinity == .downstream else { return nil }
++        guard let start = PositionResolver.textPosition(at: selection.anchor.utf16Offset, in: tree),
++              let end = PositionResolver.textPosition(at: selection.head.utf16Offset, in: tree) else {
++            return nil
++        }
++        return DocumentTextSelection(start: DocumentTextPosition(ref: start.ref, offset: start.offset, affinity: .downstream),
++                                     end: DocumentTextPosition(ref: end.ref, offset: end.offset, affinity: .downstream))
++    }
++
++    @discardableResult
++    func setDocumentTextSelection(_ selection: DocumentTextSelection) -> Bool {
++        guard selection.start.affinity != .upstream, selection.end.affinity != .upstream else { return false }
++        let document = Document(blocks: currentBlocks())
++        let tree = DocumentTree.build(from: document)
++        func resolve(_ position: DocumentTextPosition) -> Int? {
++            guard let runs = document.runs(for: position.ref), position.offset >= 0,
++                  position.offset <= runs.reduce(0, { $0 + $1.utf16Count }) else { return nil }
++            return PositionResolver.globalPosition(of: position.ref, offset: position.offset, in: tree)
++        }
++        guard let start = resolve(selection.start), let end = resolve(selection.end) else { return false }
++        finalizeMarkedText()
++        clearStructuralSelections()
++        inputBackend.notifyingSelectionChangeIgnoringCoalescing {
++            applyCaretOutcome(.range(start, end))
++        }
++        setNeedsDisplay()
++        refreshSelectionUI()
++        onSelectionChange?()
++        return true
++    }
++
+     /// One inline atom occurrence inside a paragraph region: `localOffset` is its global-axis offset within
+     /// the region (the editor counts it as 1 `U+FFFC`); `flatLen` is the UTF-16 length the chat flat space
+     /// counts instead (custom emoji alt text or formula LaTeX).
+diff --git a/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEditorUIKit/RichTextEditorView+ComposerHost.swift b/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEditorUIKit/RichTextEditorView+ComposerHost.swift
+index 0191bd2e9c12479372cb05121770aaca555e0355..702ccaeebc3724637c24bf6ef9de605468cd98e5 100644
+--- a/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEditorUIKit/RichTextEditorView+ComposerHost.swift
++++ b/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEditorUIKit/RichTextEditorView+ComposerHost.swift
+@@ -1,5 +1,6 @@
+ #if canImport(UIKit)
+ import UIKit
++import RichTextEditorCore
+ 
+ /// Small public forwarders used by the chat-composer host (`RichTextEditorChatInputNode`). The editing
+ /// surface (`canvas`) and `scrollView` are module-internal, so a consumer in another module reaches these
+@@ -26,6 +27,13 @@ public extension RichTextEditorView {
+         set { self.canvas.composerSelectedRange = newValue }
+     }
+ 
++    var documentTextSelection: DocumentTextSelection? { self.canvas.documentTextSelection }
++
++    @discardableResult
++    func setDocumentTextSelection(_ selection: DocumentTextSelection) -> Bool {
++        return self.canvas.setDocumentTextSelection(selection)
++    }
++
+     /// Reload the editing surface's input views (after changing `customInputView`).
+     func reloadComposerInputViews() { self.canvas.reloadInputViews() }
+ 
+diff --git a/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEngineEditor/RichTextEditorProtocol.swift b/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEngineEditor/RichTextEditorProtocol.swift
+index 1f8b01ee472b353933b8a478fd96333fbbaa647d..354d8eb687c838597b12643dc4b648e281386722 100644
+--- a/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEngineEditor/RichTextEditorProtocol.swift
++++ b/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEngineEditor/RichTextEditorProtocol.swift
+@@ -59,6 +59,11 @@ public protocol RichTextEditor: UIView {
+     func indent()
+     func outdent()
+     var composerSelectedRange: NSRange { get set }
++    /// Exact text selection in Document coordinates, including off-composer-axis text. nil means
++    /// there is no representable text selection (for example, a rectangular table selection).
++    var documentTextSelection: DocumentTextSelection? { get }
++    @discardableResult
++    func setDocumentTextSelection(_ selection: DocumentTextSelection) -> Bool
+     func composerCaretRect() -> CGRect?
+     var isEditorFirstResponder: Bool { get }
+     func resignEditorFirstResponder() -> Bool
 diff --git a/submodules/TelegramUI/Sources/ChatController.swift b/submodules/TelegramUI/Sources/ChatController.swift
 index 5fe58bbf51f3e27c0c06f453b59938c97fc6faa7..5961d2c90bbc684ab209d77b872c0ccaf76a82d5 100644
 --- a/submodules/TelegramUI/Sources/ChatController.swift

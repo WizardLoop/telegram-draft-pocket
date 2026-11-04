@@ -1,22 +1,54 @@
-# Real-client demo status
+# Full-client offline demo
 
-No demo video has been recorded. The production overlay is implemented in Telegram's native composer and controller; no substitute chat screen is included. A full-client, isolated offline fixture is still required before an automated capture can be claimed.
+The user authorized a **fictional `@wizardloop` demo**. This optional overlay opens that isolated fixture in the actual Telegram application: AppDelegate → Account/Postbox → SharedAccountContext/AccountContext → production ChatController. It does not use ComposerHarness, a replacement chat screen, a separate Pocket store, or a real Telegram account.
 
-The upstream ComposerHarness is useful for composer tests, but it has synthetic history and no `ChatControllerNode` keyboard machinery. It is **not** accepted here as proof of the requested full-client story. Existing upstream `--ui-test` account automation also uses network test accounts; it is not an offline Draft Pocket demo.
+The overlay and XCUITest scenario are source implementations awaiting native build/runtime results. A passing patch check is not a successful iOS run. No verified video or frame evaluation is claimed here; see [TESTING](../docs/TESTING.md) for actual run results.
 
-`run-demo.sh` validates its inputs and fails explicitly while this fixture is unavailable. It never opens a real account or silently records an unrelated screen. `apply-feature.sh --with-demo` likewise refuses unavailable demo integration. There is no supported reset command yet, because no demo data store has been created.
+## Isolation and launch
 
-## Planned fixture and UI scenario
+Apply the feature first, then `Integration/demo.patch` and the files mapped from `Demo/Overlay`. The source is gated by `DEBUG && targetEnvironment(simulator)` and `--draft-pocket-demo`; production Draft Pocket works without this optional overlay or flag.
 
-Create a disposable account/Postbox directory in a dedicated simulator and disable networking before the synthetic account opens. Seed only fictional Alex messages. The fixture must enter the real chat controller and the production store. Seed the additional pocket card by the same Put Aside path, not by a separate store implementation.
+```sh
+bash scripts/apply-feature.sh /path/to/telegram-ios --with-demo
+bash Demo/run-demo.sh --app /path/to/Telegram.app --namespace manual-v1
+# Optional later relaunch on the same launcher-created device:
+bash Demo/run-demo.sh --udid RECORDED_SIMULATOR_UDID --app /path/to/Telegram.app --namespace manual-v1
+```
 
-1. Compose: “I’ve reviewed the new sticker pack. The motion feels smoother, but the final highlight needs a softer transition. I’ll send the detailed notes shortly.” Apply subtle bold formatting.
-2. Display Alex's fictional message: “Quick question — can we publish at 18:00?”
-3. Use Put Aside through the real accessible control.
-4. Type and send: “Yes — 18:00 works.” An offline fixture insertion must be identified as local simulation, not network delivery.
-5. Open the pocket showing at least two cards. Restore the long draft, edit, and send. Check formatting survives.
-6. Record separate QA takes of swap with a nonempty composer, relaunch, dark mode and RTL.
+The wrapper creates a new dedicated simulator by default and records its identity under ignored `.local/demo-simulators/`. An optional `--udid` is accepted only when the saved UUID, device name, runtime and app bundle identifier match the available dedicated simulator. Missing/mismatched identity is rejected. No device is erased and no app is uninstalled. The wrapper rejects a build without the embedded `DRAFT_POCKET_ISOLATED_DEMO_V1` marker before changing any simulator. The marker exists only in debug simulator executable code and is printed when the fixture branch starts. The automated XCTest similarly uses its own explicitly created device.
 
-No user media was supplied. Do not invent custom-emoji server IDs or claim an ordinary Unicode emoji is a custom emoji. A valid custom-emoji fixture must be added and validated before including it in the capture.
+Supported app arguments:
 
-Use XCUITest accessibility controls, screenshots and assertions. Do not inject private UIKit touch events, play back a pre-rendered video, or mutate the store in place of the visible interaction. See [DOT_HANDOFF](../docs/DOT_HANDOFF.md) for capture acceptance criteria.
+- `--draft-pocket-demo`: enable the isolated full-client fixture.
+- `--draft-pocket-demo-data NAME`: choose a persistent namespace; 1–64 ASCII letters, digits, underscores, or hyphens. Default `manual-v1`.
+- `--draft-pocket-demo-secondary`: open a separate fictional Casey chat in the same account for isolation QA.
+
+The data root is `<app-group>/Library/draft-pocket-demo-NAME`. AccountManager, encrypted Postbox, TempBox, logs, and shared/legacy context paths use this root. Relaunch reuses it; no launch deletes a database. Choose a new name for clean data. There is no automatic reset or wipe. The existing `--ui-test` account/login mode is not used and is mutually exclusive with this fixture.
+
+RPC sessions are inert before account creation. Independent MTContext connections use a closed loopback SOCKS endpoint; backup-IP/iCloud discovery, initial WEB proxies, proxy changes, and engine changes cannot enable a real transport. APNs/VoIP registration and the startup background session are skipped. The native connection status remains offline. Network inspection during the first simulator run is still required; this is not a claim of a process-wide firewall covering arbitrary user-opened websites.
+
+The account bootstrap verifies its actual root path before writing. It never imports credentials, OTPs, account sessions, auth keys, phone numbers, premium entitlements, or custom-emoji document IDs. The fictional peer has no real username resolution; `@wizardloop` is its display name. Its zero placeholder access hash exists only so the normal local send queue can construct a request for the inert engine. No request is transmitted or acknowledged.
+
+## Real UI automation and capture
+
+Native target: `//Tests/DraftPocketDemo:DraftPocketDemoUITests`, hosted by `//Telegram:Telegram`, with an iPhone 17 / iOS 27.0 runner and large test timeout. Use the repository's Make.py workflow and the owner's build configuration. The CI capture driver supplies an explicitly created dedicated simulator; no globally shared test simulator is reused.
+
+`testCaptureProductionStory` performs actual text entry and formatting-menu gestures, saves a second card through Put Aside, types the long sticker-review draft, applies bold, puts it aside, enters and sends the short answer, restores the long draft, edits at its restored caret, and presses the real Send control. It attaches before/after screenshots for visual review. The question is initially seeded in real message history; timed incoming-message injection is not implemented.
+
+**Send means local enqueue only.** The normal pending bubble is allowed to remain pending; no success RPC, delivery ticks, or server receipt is fabricated. The initial fixture history states that no message is delivered to an account. Retain that disclosure in the final video and handoff.
+
+`testQASwapDeleteUndoRestartAndChatIsolation` performs nonempty-composer swap, native swipe Delete and the actual Undo overlay button, relaunch persistence, and a second-chat isolation check. It launches the same persistent namespace for relaunches and uses a fresh UUID namespace for each new test. Pocket cards are never seeded, and test code never imports or calls store/engine mutation helpers.
+
+Only supported XCTest APIs drive the UI. The optional patch adds accessibility metadata to the existing Send and Undo buttons; their action handlers are unchanged. No private touch injector or pre-rendered success sequence is included. These APIs are described in [Apple's XCUIElement documentation](https://developer.apple.com/documentation/xcuiautomation/xcuielement).
+
+Record the simulator's native screen continuously through the actual test run, including failures, and retain the raw take with the test result. Formatting screenshots and animation frames require human/agent visual inspection; a text-value assertion cannot establish font weight or animation quality. Follow the upstream animation-frame instructions before claiming timing, clipping, or theme behavior passed.
+
+## Limits and first-run checks
+
+- Build, startup, accessibility selectors, gestures, local enqueue, all assertions, network isolation, and recording must pass on the actual Mac runner before this is called a working demo.
+- The app retains its normal app-group/passcode setup. An unsigned simulator build may require valid simulator entitlements; the overlay does not bypass authentication or keychain checks. Diagnose actual launch evidence before changing that setup.
+- No user media was supplied. No custom emoji or media fixture is claimed. Production media-retention limits still apply.
+- Dark mode, RTL, Dynamic Type, VoiceOver, Reduce Motion, reply targets, rich structural selection, and media need their documented additional QA.
+- No real Telegram message is sent. API build configuration is not an account login. Never put real login/session data in source, CI secrets, logs, or artifacts.
+
+See [DOT_HANDOFF](../docs/DOT_HANDOFF.md) for capture acceptance criteria and evidence requirements.

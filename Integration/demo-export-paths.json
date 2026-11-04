@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "demo_new": [
+    "Tests/DraftPocketDemo/BUILD",
+    "Tests/DraftPocketDemo/DraftPocketDemoUITests.swift",
+    "submodules/TelegramCore/Sources/DraftPocketDemoBootstrap.swift"
+  ],
+  "demo_modified": [
+    "submodules/TelegramCore/Sources/Network/Network.swift",
+    "submodules/TelegramUI/Sources/AppDelegate.swift",
+    "submodules/UndoUI/Sources/UndoOverlayControllerNode.swift",
+    "submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift"
+  ],
+  "feature_sha256": {
+    "submodules/TelegramCore/Sources/Network/Network.swift": "b135376f7db35a77995d2c06dd92d1ba9b6acbe490cd339d8f745307c3ca812e",
+    "submodules/TelegramUI/Sources/AppDelegate.swift": "80c33608e1ad3982150be06f8d5175654b1d5f5ce0601afc9829739a3307e976",
+    "submodules/UndoUI/Sources/UndoOverlayControllerNode.swift": "092f55621b28a09b14eb3a9accb1b3543858074207c8995f8b07649414b4880a",
+    "submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift": "98f0c9cec725e492c998e3957cbbdf7c26902e0d5edb1ad0b376a043eeafa95c"
+  }
+}

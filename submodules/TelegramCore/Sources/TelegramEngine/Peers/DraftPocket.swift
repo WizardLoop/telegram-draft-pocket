@@ -41,14 +41,28 @@ public struct DraftPocketSelection: Codable {
     private struct Position: Codable {
         var path: [Step]
         var offset: Int32
+        var affinity: Int32?
+
+        private enum CodingKeys: String, CodingKey { case path, offset, affinity }
 
         init(_ position: ChatInputPosition) {
             self.path = position.path.map { Step(block: Int32(clamping: $0.blockIndex), slot: Int32(clamping: $0.slot)) }
             self.offset = Int32(clamping: position.offset)
+            self.affinity = position.affinity?.rawValue
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.path = try container.decode([Step].self, forKey: .path)
+            self.offset = try container.decode(Int32.self, forKey: .offset)
+            self.affinity = try container.decodeIfPresent(Int32.self, forKey: .affinity)
+            if let affinity = self.affinity, ChatInputPositionAffinity(rawValue: affinity) == nil {
+                throw DecodingError.dataCorruptedError(forKey: .affinity, in: container, debugDescription: "Unknown input selection affinity")
+            }
         }
 
         var value: ChatInputPosition {
-            return ChatInputPosition(path: self.path.map { ChatInputPathStep(blockIndex: Int($0.block), slot: Int($0.slot)) }, offset: Int(self.offset))
+            return ChatInputPosition(path: self.path.map { ChatInputPathStep(blockIndex: Int($0.block), slot: Int($0.slot)) }, offset: Int(self.offset), affinity: self.affinity.flatMap(ChatInputPositionAffinity.init(rawValue:)))
         }
     }
     private var start: Position

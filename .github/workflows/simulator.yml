@@ -51,5 +51,6 @@ jobs:
           path: ${{ runner.temp }}/draft-pocket-evidence/
           if-no-files-found: warn
           retention-days: 1
-          compression-level: 9
+          # Raw video and PNGs are already compressed; avoid spending the timeout recompressing them.
+          compression-level: 0
           include-hidden-files: false

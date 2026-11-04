@@ -33,5 +33,13 @@ jobs:
         run: bash scripts/check-integration.sh "$RUNNER_TEMP/telegram-ios"
       - name: Verify repeat application detects the complete state
         run: bash scripts/apply-feature.sh "$RUNNER_TEMP/telegram-ios"
+      - name: Reconstruct the actual demo from clean upstream and from the verified feature
+        run: |
+          python3 -c 'import json,sys; sys.exit(0 if json.load(open("Integration/files.json"))["demo"].get("available") else 1)'
+          bash scripts/bootstrap-telegram.sh "$RUNNER_TEMP/telegram-ios-demo"
+          bash scripts/check-integration.sh "$RUNNER_TEMP/telegram-ios-demo" --with-demo
+          bash scripts/apply-feature.sh "$RUNNER_TEMP/telegram-ios-demo" --with-demo
+          bash scripts/apply-feature.sh "$RUNNER_TEMP/telegram-ios" --with-demo
+          bash scripts/apply-feature.sh "$RUNNER_TEMP/telegram-ios" --with-demo
       - name: Declare validation boundary
         run: echo 'Packaging only. This job does not compile Swift, build iOS, run native feature tests, or validate UI/capture.'

@@ -12,6 +12,14 @@
   },
   "native_test_targets": [
     "//submodules/TelegramCore:DraftPocketTests",
-    "//submodules/ChatInterfaceState:DraftPocketComposerTests"
+    "//submodules/ChatInterfaceState:DraftPocketComposerTests",
+    {
+      "target": "//Tests/ComposerHarness:DraftPocketSelectionHarnessTests",
+      "filter": "HarnessDraftPocketSelectionTests"
+    },
+    {
+      "target": "//submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer:DraftPocketSelectionBridgeTests",
+      "filter": "DocumentSelectionBridgeTests"
+    }
   ]
 }

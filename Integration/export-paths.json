@@ -1,24 +1,38 @@
 {
   "schema_version": 1,
   "feature_new": [
+    "Tests/ComposerHarness/Tests/HarnessDraftPocketSelectionTests.swift",
     "submodules/ChatInterfaceState/Tests/DraftPocketComposerStateTests.swift",
     "submodules/TelegramCore/Sources/TelegramEngine/Peers/DraftPocket.swift",
     "submodules/TelegramCore/Tests/DraftPocketTests.swift",
     "submodules/TelegramPresentationData/Sources/DraftPocketStrings.swift",
+    "submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer/Sources/DocumentChatInputSelectionBridge.swift",
+    "submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer/Tests/DocumentSelectionBridgeTests.swift",
+    "submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEditorCore/Selection/DocumentTextSelection.swift",
+    "submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEngineEditor/RichTextEngineEditorView+DocumentSelection.swift",
+    "submodules/TelegramUI/Components/RichTextEditor/Tests/RichTextEditorUIKitTests/DocumentTextSelectionTests.swift",
     "submodules/TelegramUI/Sources/ChatControllerDraftPocket.swift",
     "submodules/TelegramUI/Sources/DraftPocketController.swift"
   ],
   "feature_modified": [
     "Telegram/Telegram-iOS/en.lproj/Localizable.strings",
+    "Tests/ComposerHarness/BUILD",
     "build-system/Make/Make.py",
     "submodules/AccountContext/Sources/ChatController.swift",
     "submodules/ChatInterfaceState/BUILD",
     "submodules/ChatInterfaceState/Sources/ChatInterfaceState.swift",
     "submodules/TelegramCore/BUILD",
     "submodules/TelegramCore/Sources/ChatInputContent/ChatInputContentCustomEmoji.swift",
+    "submodules/TelegramCore/Sources/ChatInputContent/ChatInputContentModel.swift",
     "submodules/TelegramCore/Sources/SyncCore/SyncCore_Namespaces.swift",
     "submodules/TelegramCore/Sources/TelegramEngine/Peers/TelegramEnginePeers.swift",
+    "submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/ChatRichTextInputNode.swift",
+    "submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer/BUILD",
+    "submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer/Sources/RichTextEditorChatInputNode.swift",
     "submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift",
+    "submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEditorUIKit/Canvas/DocumentCanvasView+ComposerSelection.swift",
+    "submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEditorUIKit/RichTextEditorView+ComposerHost.swift",
+    "submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEngineEditor/RichTextEditorProtocol.swift",
     "submodules/TelegramUI/Sources/ChatController.swift",
     "submodules/TelegramUI/Sources/ChatControllerNode.swift"
   ]

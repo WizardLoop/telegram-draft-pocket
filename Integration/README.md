@@ -27,12 +27,18 @@ bash scripts/export-feature.sh "/path/to/development-tree" --paths Integration/e
 
 Export checks the complete modified/untracked inventory against that allowlist, includes listed untracked sources, and refuses extra changes. It produces the overlay, patch, and manifest from the real development files. Do not edit the patch manually. Use LF line endings (`core.autocrlf=false`) in integration trees. Compare the reconstructed tree with the development tree after every export.
 
+After a demo has been sealed, a feature change requires explicit `export --invalidate-demo`. This invalidates only the generated demo manifest state and retains the authored fixture files and patch. Review any changed demo input, run `export-demo` again, and repeat clean reconstruction; stale demo hashes cannot be reused. On Windows, enable the repository-local `core.longpaths` option before creating a deep checkout path.
+
 ## Module boundaries
 
 `TelegramCore` owns the account-local Postbox store, versioned records, revision checks, real codecs and engine facade. `ChatInterfaceState` retains the local canonical state and structural selection. `AccountContext` carries the selection through the composer value. `ChatTextInputPanelNode` supplies the entry point. `TelegramUI` coordinates transfers and presents the native list. `TelegramPresentationData` supplies English/Hebrew strings. The manifest lists exact files, including native test targets and BUILD changes.
+
+The pinned `docs/richtext-composer.md` still describes `debugRichText` as the editor gate. The actual panel source (configuration near lines 278 and 900) uses `ios_rich_input_mode`: default dual-field switching, always-native mode, or legacy-only mode; `useInputDecEngine` selects the newer native engine. This integration follows the source and canonical `ChatInputContent`, not that stale documentation paragraph. Draft Pocket itself has no demo/experimental activation flag. All applicable backends still need runtime QA.
 
 No upstream Git history, full client, signing files, or Git submodule is published in this repository. The directory name `submodules` is an overlay destination mapping.
 
 ## Demo boundary
 
-No full-client offline fixture has been validated. `--with-demo` fails explicitly. There is no empty `demo.patch` or alternate mock chat. Normal Draft Pocket integration is independent of a demo flag. See [limitations](../docs/LIMITATIONS.md) before running the source with valuable drafts.
+The optional fixture is separately authored under `Demo/Overlay` and `Integration/demo.patch`, relative to the exact feature state. `scripts/package.py export-demo --reference FEATURE_CHECKOUT` seals its input/output hashes after checking the complete ordered application. `--with-demo` installs the feature first and then this fixture; a partial or stale state fails before mutation. Normal Draft Pocket integration is independent of the fixture flag.
+
+The native scenario uses the full Telegram app, a fictional `@wizardloop` conversation and supported XCTest UI actions. Source integration is separate from native build/runtime validation. Consult [testing](../docs/TESTING.md) for actual evidence and [limitations](../docs/LIMITATIONS.md) before using the unverified source with valuable drafts.
