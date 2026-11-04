@@ -126,7 +126,7 @@
     ],
     "patch": {
       "source": "Integration/telegram-ios.patch",
-      "sha256": "a45d0569b6c0e92dc8dcdb2983dc8d135cf48aaac427107a3a9b3ae1324b3877",
+      "sha256": "9cf1eff6ff9f2008241135ec4a6505b5a79406b525b321d6dddd973a9999e3fa",
       "files": [
         {
           "action": "modify",
@@ -288,7 +288,7 @@
           "action": "modify",
           "target": "submodules/TelegramUI/Sources/ChatControllerNode.swift",
           "before_sha256": "296f809989b39fe4705a1c450baf00078cd8508369ea0d6b5ec5c17064bc10a1",
-          "after_sha256": "0fc92a587d166eb9a0ee17f1f9c446af6e25c30296a3e1569d06868d1411764e"
+          "after_sha256": "67f4e50ec1fc1f602e4ded6f8076026a30fb487a0bf514036c78e0520ae6df91"
         }
       ]
     }

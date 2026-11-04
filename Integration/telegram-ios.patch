@@ -1736,7 +1736,7 @@ index 5fe58bbf51f3e27c0c06f453b59938c97fc6faa7..27940ba8c9d16c8cdcf201d9f2cec287
                          
                          strongSelf.updateChatPresentationInterfaceState(animated: true, interactive: true, { state in
 diff --git a/submodules/TelegramUI/Sources/ChatControllerNode.swift b/submodules/TelegramUI/Sources/ChatControllerNode.swift
-index ee5838449d59b1c0631b319620f5f900d8aba298..4be729329a84db032a129ff51496abe8deda3765 100644
+index ee5838449d59b1c0631b319620f5f900d8aba298..cc77d28c2e2a274854ed9454d818acb35bd7114d 100644
 --- a/submodules/TelegramUI/Sources/ChatControllerNode.swift
 +++ b/submodules/TelegramUI/Sources/ChatControllerNode.swift
 @@ -344,6 +344,8 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
@@ -1759,7 +1759,7 @@ index ee5838449d59b1c0631b319620f5f900d8aba298..4be729329a84db032a129ff51496abe8
          self.textInputPanelNode?.updateActivity = { [weak self] in
              self?.updateTypingActivity(true)
          }
-@@ -5005,6 +5011,107 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+@@ -5005,6 +5011,105 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
          }
      }
      
@@ -1767,10 +1767,8 @@ index ee5838449d59b1c0631b319620f5f900d8aba298..4be729329a84db032a129ff51496abe8
 +    /// can release its active resource owner. Preparation never dismisses the keyboard.
 +    private func prepareDraftPocketMessageSend(_ source: ChatPresentationInterfaceState, inputClearGuard: ChatInputClearGuard, send: @escaping (String?) -> Void) {
 +        let input = source.interfaceState.composeInputState
-+        let hasLocalEmoji = input.content.draftPocketCustomEmojiFiles().values.contains {
-+            $0.resource is LocalFileMediaResource || $0.resource is LocalFileReferenceMediaResource
-+        }
-+        guard !input.content.allMedia.isEmpty || hasLocalEmoji else {
++        let hasRetainedResources = draftPocketRetainedResourceIds(in: input.content)?.isEmpty == false
++        guard !input.content.allMedia.isEmpty || hasRetainedResources else {
 +            send(nil)
 +            return
 +        }
@@ -1867,7 +1865,7 @@ index ee5838449d59b1c0631b319620f5f900d8aba298..4be729329a84db032a129ff51496abe8
      func maybeSendEphemeralMessage(sendNormally: @escaping () -> Void) {
          var isScheduledMessages = false
          if case .scheduledMessages = self.chatPresentationInterfaceState.subject {
-@@ -5014,12 +5121,14 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+@@ -5014,12 +5119,14 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
          let interfaceState = self.chatPresentationInterfaceState.interfaceState
          let inputText = interfaceState.effectiveInputState.inputText.string
          if !isScheduledMessages, interfaceState.editMessage == nil, interfaceState.postSuggestionState == nil, interfaceState.forwardMessageIds == nil, let peerId = self.chatLocation.peerId, mayContainTypedEphemeralBotCommand(inputText) {
@@ -1882,7 +1880,7 @@ index ee5838449d59b1c0631b319620f5f900d8aba298..4be729329a84db032a129ff51496abe8
  
                  if let resolved = resolveEphemeralBotCommand(text: inputText, peerCommands: peerCommands) {
                      let replyMessageSubject = self.chatPresentationInterfaceState.interfaceState.replyMessageSubject
-@@ -5027,6 +5136,7 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+@@ -5027,6 +5134,7 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
                          guard let strongSelf = self else {
                              return
                          }
@@ -1890,7 +1888,7 @@ index ee5838449d59b1c0631b319620f5f900d8aba298..4be729329a84db032a129ff51496abe8
                          strongSelf.collapseInput()
  
                          strongSelf.controller?.updateChatPresentationInterfaceState(animated: true, interactive: false, {
-@@ -5051,6 +5161,7 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+@@ -5051,6 +5159,7 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
      }
  
      func sendCurrentMessage(silentPosting: Bool? = nil, scheduleTime: Int32? = nil, repeatPeriod: Int32? = nil, postpone: Bool = false, messageEffect: ChatSendMessageEffect? = nil, sendWithoutFormatting: Bool = false, completion: @escaping () -> Void = {}) {
@@ -1898,7 +1896,7 @@ index ee5838449d59b1c0631b319620f5f900d8aba298..4be729329a84db032a129ff51496abe8
          guard let textInputPanelNode = self.inputPanelNode as? ChatTextInputPanelNode else {
              return
          }
-@@ -5066,6 +5177,8 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+@@ -5066,6 +5175,8 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
              effectivePresentationInterfaceState = effectivePresentationInterfaceState.updatedInterfaceState { $0.withUpdatedEffectiveInputState(textInputPanelNode.inputTextState) }
          }
          
@@ -1907,7 +1905,7 @@ index ee5838449d59b1c0631b319620f5f900d8aba298..4be729329a84db032a129ff51496abe8
          if let _ = effectivePresentationInterfaceState.interfaceState.editMessage, effectivePresentationInterfaceState.interfaceState.postSuggestionState == nil {
              self.interfaceInteraction?.editMessage()
          } else {
-@@ -5419,11 +5532,35 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+@@ -5419,11 +5530,35 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
                      }
                  }
                  
@@ -1945,7 +1943,7 @@ index ee5838449d59b1c0631b319620f5f900d8aba298..4be729329a84db032a129ff51496abe8
                      var messages = messages
                      if let overrideThreadId {
                          messages = messages.map { message in
-@@ -5431,6 +5568,16 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+@@ -5431,6 +5566,16 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
                          }
                      }
                      
@@ -1962,7 +1960,7 @@ index ee5838449d59b1c0631b319620f5f900d8aba298..4be729329a84db032a129ff51496abe8
                      var usedCorrelationId: Int64?
                      if !messages.isEmpty, case .message = messages[messages.count - 1] {
                          let correlationId = Int64.random(in: 0 ..< Int64.max)
-@@ -5456,6 +5603,19 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+@@ -5456,6 +5601,19 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
                          guard let self, let textInputPanelNode = self.inputPanelNode as? ChatTextInputPanelNode else {
                              return
                          }
@@ -1982,7 +1980,7 @@ index ee5838449d59b1c0631b319620f5f900d8aba298..4be729329a84db032a129ff51496abe8
                          self.collapseInput()
                          
                          self.ignoreUpdateHeight = true
-@@ -5506,21 +5666,25 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+@@ -5506,21 +5664,25 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
                      }
                  }
                  
