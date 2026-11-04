@@ -2,6 +2,7 @@
   "schema_version": 1,
   "feature_new": [
     "Tests/ComposerHarness/Tests/HarnessDraftPocketSelectionTests.swift",
+    "submodules/ChatInterfaceState/Sources/ChatInputClearGuard.swift",
     "submodules/ChatInterfaceState/Tests/DraftPocketComposerStateTests.swift",
     "submodules/Postbox/Sources/MediaBoxResourceRetention.swift",
     "submodules/Postbox/Tests/MediaBoxDraftRetentionTests.swift",
@@ -23,6 +24,7 @@
   ],
   "feature_modified": [
     "Telegram/Telegram-iOS/en.lproj/Localizable.strings",
+    "Tests/ComposerHarness/AppContext/HarnessSharedAccountContext+Generated.swift",
     "Tests/ComposerHarness/BUILD",
     "build-system/Make/Make.py",
     "submodules/AccountContext/Sources/ChatController.swift",

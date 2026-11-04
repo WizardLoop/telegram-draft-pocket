@@ -8,6 +8,7 @@ import json
 import math
 import os
 from pathlib import Path
+import plistlib
 import re
 import shutil
 import signal
@@ -55,6 +56,131 @@ def selected_native_case(native_cases, test_filter):
             or cases[0].get("status") != "Success"):
         raise package.PackageError("Native xcresult does not prove the single requested scenario passed")
     return cases[0]
+
+
+def app_binary_inventory(read_plist, hash_file, bundle_id):
+    """Read only declared bundle metadata and the three compiled executables."""
+    files = []
+    for prefix, expected_id in (("", bundle_id),
+            ("Frameworks/TelegramUIFramework.framework/", bundle_id + ".TelegramUI"),
+            ("Frameworks/TelegramCoreFramework.framework/", bundle_id + ".TelegramCore")):
+        metadata_path = prefix + "Info.plist"
+        metadata = read_plist(metadata_path)
+        if not isinstance(metadata, dict) or metadata.get("CFBundleIdentifier") != expected_id:
+            raise package.PackageError("Installed/built bundle identity does not match the requested fixture")
+        executable = metadata.get("CFBundleExecutable")
+        if (not isinstance(executable, str) or package.relative(executable) != executable
+                or "/" in executable or "\\" in executable):
+            raise package.PackageError("Bundle executable must be one safe file name")
+        if not prefix and "iPhoneSimulator" not in metadata.get("CFBundleSupportedPlatforms", []):
+            raise package.PackageError("Capture provenance requires an iPhoneSimulator app")
+        for path in (metadata_path, prefix + executable):
+            files.append({"path": path, **hash_file(path)})
+    return {"bundle_id": bundle_id, "files": files}
+
+
+def hash_stream(stream, expected_size):
+    if not 0 < expected_size <= 2 * 1024 ** 3:
+        raise package.PackageError("Bundle provenance payload is empty or exceeds its 2 GiB limit")
+    checksum, size = hashlib.sha256(), 0
+    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+        size += len(chunk)
+        if size > expected_size:
+            raise package.PackageError("Bundle provenance payload changed while reading")
+        checksum.update(chunk)
+    if size != expected_size:
+        raise package.PackageError("Bundle provenance payload size differs from metadata")
+    return {"bytes": size, "sha256": checksum.hexdigest()}
+
+
+def directory_binary_inventory(app, bundle_id):
+    def source(path):
+        result = package.bounded(app, path)
+        if not result.is_file() or not stat.S_ISREG(result.stat().st_mode):
+            raise package.PackageError("Missing regular app provenance file")
+        return result
+
+    def read_plist(path):
+        target = source(path)
+        if target.stat().st_size > 1024 ** 2:
+            raise package.PackageError("Bundle Info.plist exceeds 1 MiB")
+        return plistlib.loads(target.read_bytes())
+
+    def hash_file(path):
+        target = source(path)
+        with target.open("rb") as stream:
+            return hash_stream(stream, target.stat().st_size)
+
+    return app_binary_inventory(read_plist, hash_file, bundle_id)
+
+
+def built_binary_inventory(checkout, bundle_id):
+    # The pinned Make.py uses this exact IPA output. Hash it after buildOnly,
+    # so its build number/configuration matches the test host, not an earlier build.
+    outputs = (checkout / "bazel-bin/Telegram").resolve(strict=True)
+    ipa, app = outputs / "Telegram.ipa", outputs / "Telegram.app"
+    if ipa.is_file():
+        with zipfile.ZipFile(ipa) as archive:
+            entries = {}
+            for entry in archive.infolist():
+                name = entry.filename
+                if name in entries:
+                    raise package.PackageError("Built IPA has duplicate paths")
+                entries[name] = entry
+
+            def source(path):
+                name = "Payload/Telegram.app/" + package.relative(path)
+                entry = entries.get(name)
+                if (entry is None or entry.is_dir() or entry.flag_bits & 1
+                        or stat.S_IFMT(entry.external_attr >> 16) not in (0, stat.S_IFREG)
+                        or sum(candidate.casefold() == name.casefold() for candidate in entries) != 1):
+                    raise package.PackageError("Built IPA lacks a regular provenance file")
+                return entry
+
+            def read_plist(path):
+                entry = source(path)
+                if entry.file_size > 1024 ** 2:
+                    raise package.PackageError("Built Info.plist exceeds 1 MiB")
+                return plistlib.loads(archive.read(entry))
+
+            def hash_file(path):
+                entry = source(path)
+                with archive.open(entry) as stream:
+                    return hash_stream(stream, entry.file_size)
+
+            result = app_binary_inventory(read_plist, hash_file, bundle_id)
+        return {"source": "bazel-bin/Telegram/Telegram.ipa", **result}
+    if app.is_dir():
+        return {"source": "bazel-bin/Telegram/Telegram.app", **directory_binary_inventory(app, bundle_id)}
+    raise package.PackageError("Fresh test build has no Telegram IPA/app for binary provenance")
+
+
+def owned_app_container(path, simulator_home, udid):
+    canonical_udid = str(uuid.UUID(udid)).upper()
+    root = package.bounded(simulator_home, canonical_udid + "/data/Containers/Bundle/Application")
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        raise package.PackageError("Simulator returned a relative app container")
+    try:
+        relative = candidate.relative_to(root)
+        if len(relative.parts) != 2 or candidate.suffix != ".app":
+            raise ValueError("Unexpected app container shape")
+        uuid.UUID(relative.parts[0])
+    except ValueError:
+        raise package.PackageError("App container is outside the dedicated Simulator") from None
+    app = package.bounded(root, relative.as_posix())
+    if not app.is_dir():
+        raise package.PackageError("Installed app container does not exist")
+    return app
+
+
+def verify_installed_binaries(path, simulator_home, udid, bundle_id, built):
+    installed = directory_binary_inventory(owned_app_container(path, simulator_home, udid), bundle_id)
+    if installed["bundle_id"] != built["bundle_id"] or installed["files"] != built["files"]:
+        raise package.PackageError("Installed app binaries/metadata differ from the fresh test build")
+    return {"status": "matched", "source": built["source"], "bundle_id": bundle_id,
+            "udid": str(uuid.UUID(udid)).upper(), "files": installed["files"],
+            "verified_utc": datetime.datetime.now(datetime.timezone.utc).isoformat()}
 
 
 def xcresult_cases(root, read_reference):
@@ -464,6 +590,9 @@ def capture(checkout, configuration, cache, artifacts, test_filter):
         if process.wait():
             raise package.PackageError("Demo XCTest target failed to build; recording was not started")
 
+    built_binaries = built_binary_inventory(checkout, config["bundle_id"])
+    (artifacts / "built-binary-provenance.json").write_text(json.dumps(built_binaries, indent=2) + "\n", encoding="utf-8")
+
     runtimes = json.loads(package.run(["xcrun", "simctl", "list", "runtimes", "--json"]))["runtimes"]
     runtime = next((r for r in runtimes if r.get("isAvailable") and r.get("version") == demo["os_version"]
                     and r.get("name", "").startswith("iOS ")), None)
@@ -530,6 +659,11 @@ def capture(checkout, configuration, cache, artifacts, test_filter):
             raise package.PackageError("Recorder stopped before XCTest completed; take is incomplete")
         if code:
             raise package.PackageError(f"Real demo XCTest failed with exit {code}; raw evidence retained")
+        container = package.run(["xcrun", "simctl", "get_app_container", udid, config["bundle_id"], "app"]).decode().strip()
+        provenance = verify_installed_binaries(container, Path.home() / "Library/Developer/CoreSimulator/Devices",
+                                              udid, config["bundle_id"], built_binaries)
+        (artifacts / "installed-binary-provenance.json").write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
+        identity["installed_binary_provenance"] = "installed-binary-provenance.json"
         test_directory = checkout / "bazel-testlogs/Tests/DraftPocketDemo/DraftPocketDemoUITests"
         report = test_directory / "test.xml"
         if report.is_file():
@@ -587,6 +721,6 @@ if __name__ == "__main__":
                 destination = args.artifacts.resolve() / name
                 destination.mkdir(parents=True, exist_ok=False)
                 capture(args.checkout.resolve(), args.configuration.resolve(), args.cache.resolve(), destination, test_filter)
-    except (package.PackageError, OSError, ValueError, KeyError) as error:
+    except (package.PackageError, OSError, ValueError, KeyError, zipfile.BadZipFile) as error:
         print("error: " + str(error), file=sys.stderr)
         sys.exit(1)

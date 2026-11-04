@@ -10,6 +10,20 @@ import ChatPresentationInterfaceState
 import UndoUI
 
 extension ChatControllerImpl {
+    func capturePendingInputClear() -> ChatInputClearGuard {
+        let state = self.presentationInterfaceState.interfaceState
+        let input = self.chatDisplayNode.textInputPanelNode?.inputTextState ?? state.composeInputState
+        return ChatInputClearGuard(peerId: self.chatLocation.peerId, threadId: self.chatLocation.threadId, generation: self.draftPocketComposerGeneration, input: input, state: state)
+    }
+
+    func canApplyPendingInputClear(_ captured: ChatInputClearGuard, allowMarkedText: Bool = false) -> Bool {
+        guard !self.draftPocketOperationInProgress,
+              allowMarkedText || self.chatDisplayNode.textInputPanelNode?.draftPocketHasMarkedText != true else { return false }
+        let state = self.presentationInterfaceState.interfaceState
+        let input = self.chatDisplayNode.textInputPanelNode?.inputTextState ?? state.composeInputState
+        return captured.matches(peerId: self.chatLocation.peerId, threadId: self.chatLocation.threadId, generation: self.draftPocketComposerGeneration, input: input, state: state)
+    }
+
     /// Read the exact account's store. A pocket observation never silently adopts another
     /// controller's active-state token: doing so would turn a stale editor into a writer.
     func refreshDraftPocketCount() {
@@ -163,7 +177,7 @@ extension ChatControllerImpl {
                 restoredInput.selection = item.snapshot.selection
                 // Composer fields travel; scroll position, selection mode and unrelated chat state do not.
                 nextState = captured.withUpdatedComposeInputState(restoredInput)
-                    .withUpdatedReplyMessageSubject(restored.replyMessageSubject)
+                    .withUpdatedReplyMessageSubject(replyAvailable ? restored.replyMessageSubject : nil)
                     .withUpdatedComposeDisableUrlPreviews(restored.composeDisableUrlPreviews)
                     .withUpdatedInputLanguage(restored.inputLanguage)
                     .withUpdatedSendMessageEffect(restored.sendMessageEffect)
@@ -207,6 +221,8 @@ extension ChatControllerImpl {
                     participant.draftPocketHasActiveToken = true
                     participant.draftPocketView = updatedView
                     guard participant.chatLocation.peerId == peerId, participant.chatLocation.threadId == threadId else { continue }
+                    // Invalidate delayed sends even when a restored card is byte-for-byte equal.
+                    participant.draftPocketComposerGeneration &+= 1
                     participant.updateChatPresentationInterfaceState(animated: !UIAccessibility.isReduceMotionEnabled, interactive: true, { state in
                         state.updatedInterfaceState { current in
                             current.withUpdatedComposeInputState(nextState.composeInputState)

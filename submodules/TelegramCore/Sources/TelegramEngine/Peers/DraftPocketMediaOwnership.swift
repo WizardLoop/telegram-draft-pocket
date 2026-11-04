@@ -108,7 +108,7 @@ final class DraftPocketMediaPreparation {
         self.session = try mediaBox.draftResourceRetention.beginSession()
         var resources: [String: MediaBoxResourceRetention.Resource] = [:]
         for resource in try self.session.pinnedResources() { resources[resource.id] = resource }
-        for (id, source) in sources {
+        for (id, source) in sources.sorted(by: { $0.key.stringRepresentation < $1.key.stringRepresentation }) {
             resources[id.stringRepresentation] = try self.session.stage(id: id, completeSourcePath: source)
         }
         self.resources = resources
@@ -120,6 +120,21 @@ final class DraftPocketMediaPreparation {
             return resource
         }
     }
+}
+
+/// Preparation can publish several pins before a later source fails. Run independently of the
+/// cancelled observer, after the failed/cancelled lease releases; the collector takes a fresh
+/// locked ownership snapshot, so a concurrently committed card/send remains protected.
+func draftPocketFinishPreparationFailure(postbox: Postbox, completion: @escaping () -> Void) {
+    guard postbox.mediaBox.draftResourceRetention.hasPersistedResources else {
+        completion()
+        return
+    }
+    let _ = _internal_collectDraftPocketMedia(postbox: postbox).startStandalone(completed: completion)
+}
+
+func draftPocketSchedulePreparationCollection(postbox: Postbox) {
+    draftPocketFinishPreparationFailure(postbox: postbox, completion: {})
 }
 
 /// Resource discovery uses the canonical media objects, including nested blocks and emoji files.
@@ -193,6 +208,10 @@ func _internal_updateDraftPocketRetainingMedia(postbox: Postbox, peerId: PeerId,
                     }
                     let preparation = try DraftPocketMediaPreparation(mediaBox: postbox.mediaBox, sources: sources)
                     disposable.set(postbox.transaction { transaction -> (DraftPocketResult, DraftPocketMediaPreparation) in
+                        // A disposed next observer cannot perform cleanup after a CAS rejection.
+                        // Queue it from the transaction itself: it waits for the result-held lease
+                        // to release after commit, then reads a fresh ownership snapshot.
+                        defer { draftPocketSchedulePreparationCollection(postbox: postbox) }
                         let result = _internal_updateDraftPocket(transaction: transaction, peerId: peerId, threadId: threadId, expectedRevision: expectedRevision, expectedActiveState: expectedActiveState, operation: operation, now: Int32(clamping: Int64(Date().timeIntervalSince1970)), itemId: UUID().uuidString, mediaPreparation: preparation)
                         return (result, preparation)
                     }.start(next: { result, preparation in
@@ -203,14 +222,21 @@ func _internal_updateDraftPocketRetainingMedia(postbox: Postbox, peerId: PeerId,
                         let _ = _internal_collectDraftPocketMedia(postbox: postbox).startStandalone()
                     }))
                 } catch let error as DraftPocketError {
-                    subscriber.putNext(.failure(error))
-                    subscriber.putCompletion()
+                    draftPocketFinishPreparationFailure(postbox: postbox) {
+                        subscriber.putNext(.failure(error))
+                        subscriber.putCompletion()
+                    }
                 } catch {
-                    subscriber.putNext(.failure(.mediaRetentionUnavailable))
-                    subscriber.putCompletion()
+                    draftPocketFinishPreparationFailure(postbox: postbox) {
+                        subscriber.putNext(.failure(.mediaRetentionUnavailable))
+                        subscriber.putCompletion()
+                    }
                 }
             }
-            return disposable
+            return ActionDisposable {
+                disposable.dispose()
+                draftPocketSchedulePreparationCollection(postbox: postbox)
+            }
         }
     }
 }
@@ -262,12 +288,17 @@ func _internal_prepareDraftPocketOutgoingMedia(postbox: Postbox, peerId: PeerId,
                     }
                     subscriber.putNext(.success(try DraftPocketMediaPreparation(mediaBox: postbox.mediaBox, sources: sources)))
                     subscriber.putCompletion()
+                    // Also covers disposal before the background prepare began: its result may
+                    // be ignored without ever subscribing to an enqueue transaction.
+                    draftPocketSchedulePreparationCollection(postbox: postbox)
                 } catch {
-                    subscriber.putNext(.failure(error))
-                    subscriber.putCompletion()
+                    draftPocketFinishPreparationFailure(postbox: postbox) {
+                        subscriber.putNext(.failure(error))
+                        subscriber.putCompletion()
+                    }
                 }
             }
-            return EmptyDisposable
+            return ActionDisposable { draftPocketSchedulePreparationCollection(postbox: postbox) }
         }
     }
 }

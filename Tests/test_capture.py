@@ -5,6 +5,7 @@ import copy
 import hashlib
 import json
 from pathlib import Path
+import plistlib
 import sys
 import tempfile
 import unittest
@@ -238,6 +239,88 @@ class NamedScreenshotTests(unittest.TestCase):
             with mock.patch.object(capture.package, "run", side_effect=tool), self.assertRaises(capture.package.PackageError):
                 capture.export_named_screenshots(Path("test.xcresult"), artifacts, self.case, self.selection, self.summary)
             self.assertEqual(list(artifacts.iterdir()), [])
+
+
+class BinaryProvenanceTests(unittest.TestCase):
+    def setUp(self):
+        self.udid = "CA1C775E-9033-4666-9B09-1E195CA035B5"
+        self.application = "A3159F14-508D-4CB9-946D-84ED2F4FEFAE"
+        self.bundle_id = "org.example.draftpocket"
+
+    def create_app(self, app):
+        for prefix, identifier, executable in (("", self.bundle_id, "Telegram"),
+                ("Frameworks/TelegramUIFramework.framework", self.bundle_id + ".TelegramUI", "TelegramUIFramework"),
+                ("Frameworks/TelegramCoreFramework.framework", self.bundle_id + ".TelegramCore", "TelegramCoreFramework")):
+            destination = app / prefix
+            destination.mkdir(parents=True, exist_ok=True)
+            (destination / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": identifier,
+                "CFBundleExecutable": executable, "CFBundleSupportedPlatforms": ["iPhoneSimulator"]}))
+            (destination / executable).write_bytes(("compiled test fixture " + executable).encode())
+
+    def test_fresh_ipa_and_installed_main_ui_core_files_match_exactly(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = root / "Devices" / self.udid / "data/Containers/Bundle/Application" / self.application / "Telegram.app"
+            self.create_app(app)
+            outputs = root / "checkout/bazel-bin/Telegram"
+            outputs.mkdir(parents=True)
+            with zipfile.ZipFile(outputs / "Telegram.ipa", "w") as archive:
+                for file in app.rglob("*"):
+                    if file.is_file():
+                        archive.write(file, "Payload/Telegram.app/" + file.relative_to(app).as_posix())
+            built = capture.built_binary_inventory(root / "checkout", self.bundle_id)
+            result = capture.verify_installed_binaries(app, root / "Devices", self.udid, self.bundle_id, built)
+            self.assertEqual(result["status"], "matched")
+            self.assertEqual(len(result["files"]), 6)
+            self.assertEqual(result["udid"], self.udid)
+            self.assertEqual(result["files"][1]["sha256"], hashlib.sha256((app / "Telegram").read_bytes()).hexdigest())
+            self.assertNotIn(str(root), json.dumps(result))
+
+    def test_changed_executable_or_metadata_is_not_provenance(self):
+        for name in ("Telegram", "Info.plist", "Frameworks/TelegramCoreFramework.framework/TelegramCoreFramework"):
+            with self.subTest(path=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                app = root / self.udid / "data/Containers/Bundle/Application" / self.application / "Telegram.app"
+                self.create_app(app)
+                built = {"source": "test fresh build", **capture.directory_binary_inventory(app, self.bundle_id)}
+                target = app / name
+                target.write_bytes(target.read_bytes() + b" ")
+                with self.assertRaises((capture.package.PackageError, plistlib.InvalidFileException)):
+                    capture.verify_installed_binaries(app, root, self.udid, self.bundle_id, built)
+
+    def test_other_device_relative_path_and_nested_app_are_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for candidate in (Path("relative/Telegram.app"), root / "another-device/Telegram.app",
+                              root / self.udid / "data/Containers/Bundle/Application" / self.application / "nested/Telegram.app"):
+                with self.subTest(path=candidate), self.assertRaises(capture.package.PackageError):
+                    capture.owned_app_container(candidate, root, self.udid)
+
+    def test_bundle_executable_traversal_and_wrong_identity_are_rejected_before_hash(self):
+        for executable in ("../outside", "/absolute", "nested/executable", "C:\\outside"):
+            with self.subTest(executable=executable):
+                metadata = {"CFBundleIdentifier": self.bundle_id, "CFBundleExecutable": executable,
+                            "CFBundleSupportedPlatforms": ["iPhoneSimulator"]}
+                hash_file = mock.Mock()
+                with self.assertRaises(capture.package.PackageError):
+                    capture.app_binary_inventory(lambda _: metadata, hash_file, self.bundle_id)
+                hash_file.assert_not_called()
+        with self.assertRaises(capture.package.PackageError):
+            capture.app_binary_inventory(lambda _: {"CFBundleIdentifier": "another.app"}, mock.Mock(), self.bundle_id)
+
+    def test_missing_build_artifact_and_archive_symlink_are_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            outputs = root / "bazel-bin/Telegram"
+            outputs.mkdir(parents=True)
+            with self.assertRaises(capture.package.PackageError):
+                capture.built_binary_inventory(root, self.bundle_id)
+            with zipfile.ZipFile(outputs / "Telegram.ipa", "w") as archive:
+                entry = zipfile.ZipInfo("Payload/Telegram.app/Info.plist")
+                entry.external_attr = (0o120777 << 16)
+                archive.writestr(entry, b"outside")
+            with self.assertRaises(capture.package.PackageError):
+                capture.built_binary_inventory(root, self.bundle_id)
 
 
 if __name__ == "__main__":

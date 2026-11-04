@@ -12,4 +12,7 @@
 - Add an isolated full-client fictional `@wizardloop` fixture, real XCTest story/QA, dedicated Simulator launcher and continuous recording with scenario and motion evidence checks.
 - Retain complete draft-media bytes with cross-process cache protection and Postbox ownership; preserve a durable recovery before composer-send clearing, and hand ownership to real pending messages. Native byte/lifecycle tests await execution.
 - Insert the fictional question after actual draft typing and preserve only explicitly named original XCTest screenshots with their native result identities.
+- Protect newer and identically restored drafts from delayed send callbacks; narrow active media ownership during ordinary autosave and collect abandoned preparations after failure.
+- Verify installed Simulator app/framework hashes against the fresh test host and retain custom XCTest screenshots with a one-field patch to the same pinned runner.
+- Repair the pinned composer harness's missing share-screen protocol method, discovered by the actual native build.
 - Keep native runtime and capture results separate from source/packaging validation; refuse unsupported transfers before mutation.

@@ -47,4 +47,46 @@ final class DraftPocketComposerStateTests: XCTestCase {
         let opaque = OpaqueChatInterfaceState(opaqueData: try EngineEncoder.encode(local), historyScrollMessageIndex: nil, mediaDraftState: nil, synchronizeableInputState: remote)
         XCTAssertEqual(ChatInterfaceState.parse(opaque).composeInputState.content.plainText, "Remote update")
     }
+
+    func testDelayedClearRejectsIdenticalDraftRestoredByPocket() {
+        let peerId = EnginePeer.Id(namespace: Namespaces.Peer.CloudUser, id: ._internalFromInt64Value(1001))
+        let input = self.fixture()
+        let state = ChatInterfaceState().withUpdatedComposeInputState(input)
+        let pending = ChatInputClearGuard(peerId: peerId, threadId: nil, generation: 4, input: input, state: state)
+        XCTAssertTrue(pending.matches(peerId: peerId, threadId: nil, generation: 4, input: input, state: state))
+        // A successful restore replaces the draft even if its entire canonical value is equal.
+        XCTAssertFalse(pending.matches(peerId: peerId, threadId: nil, generation: 5, input: input, state: state))
+    }
+
+    func testDelayedClearRejectsNewInputSelectionAndReplyContext() {
+        let peerId = EnginePeer.Id(namespace: Namespaces.Peer.CloudUser, id: ._internalFromInt64Value(1001))
+        let input = self.fixture()
+        let state = ChatInterfaceState().withUpdatedComposeInputState(input)
+        let pending = ChatInputClearGuard(peerId: peerId, threadId: nil, generation: 1, input: input, state: state)
+        let newer = ChatTextInputState(inputText: NSAttributedString(string: "Keep this newer draft"))
+        XCTAssertFalse(pending.matches(peerId: peerId, threadId: nil, generation: 1, input: newer, state: state))
+        var movedCaret = input
+        let position = ChatInputPosition(path: [ChatInputPathStep(blockIndex: 0), ChatInputPathStep(blockIndex: 0)], offset: 0)
+        movedCaret.selection = ChatInputSelection(start: position, end: position)
+        XCTAssertFalse(pending.matches(peerId: peerId, threadId: nil, generation: 1, input: movedCaret, state: state))
+        let reply = ChatInterfaceState.ReplyMessageSubject(messageId: EngineMessage.Id(peerId: peerId, namespace: Namespaces.Message.Cloud, id: 9), quote: nil, innerSubject: nil)
+        XCTAssertFalse(pending.matches(peerId: peerId, threadId: nil, generation: 1, input: input, state: state.withUpdatedReplyMessageSubject(reply)))
+        XCTAssertFalse(pending.matches(peerId: peerId, threadId: nil, generation: 1, input: input, state: state.withUpdatedSendMessageEffect(42)))
+        XCTAssertFalse(pending.matches(peerId: peerId, threadId: nil, generation: 1, input: input, state: state.withUpdatedComposeDisableUrlPreviews(["https://example.org"])))
+        // Background persistence timestamps are not a different composer.
+        XCTAssertTrue(pending.matches(peerId: peerId, threadId: nil, generation: 1, input: input, state: state.withUpdatedTimestamp(100)))
+    }
+
+    func testDelayedClearRebasesOnlyExplicitForumThreadTransfer() {
+        let peerId = EnginePeer.Id(namespace: Namespaces.Peer.CloudUser, id: ._internalFromInt64Value(1001))
+        let otherPeerId = EnginePeer.Id(namespace: Namespaces.Peer.CloudUser, id: ._internalFromInt64Value(1002))
+        let input = self.fixture()
+        let state = ChatInterfaceState().withUpdatedComposeInputState(input)
+        let pending = ChatInputClearGuard(peerId: peerId, threadId: nil, generation: 1, input: input, state: state)
+        XCTAssertFalse(pending.matches(peerId: peerId, threadId: 77, generation: 1, input: input, state: state))
+        let routed = pending.withUpdatedThreadId(77)
+        XCTAssertTrue(routed.matches(peerId: peerId, threadId: 77, generation: 1, input: input, state: state))
+        XCTAssertFalse(routed.matches(peerId: otherPeerId, threadId: 77, generation: 1, input: input, state: state))
+        XCTAssertFalse(routed.matches(peerId: peerId, threadId: 77, generation: 2, input: input, state: state))
+    }
 }

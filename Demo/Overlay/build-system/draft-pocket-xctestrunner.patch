@@ -1,0 +1,22 @@
+diff --git a/xctestrunner/test_runner/xctestrun.py b/xctestrunner/test_runner/xctestrun.py
+--- a/xctestrunner/test_runner/xctestrun.py
++++ b/xctestrunner/test_runner/xctestrun.py
+@@ -520,17 +520,17 @@
+     }
+     self._xctestrun_dict = {
+         'ProductModuleName': self._test_name.replace("-", "_"),
+         'IsUITestBundle': True,
+         'SystemAttachmentLifetime': 'keepNever',
+         'TestBundlePath': self._test_bundle_dir,
+         'TestHostPath': uitest_runner_app,
+         'UITargetAppPath': self._app_under_test_dir,
+-        'UserAttachmentLifetime': 'keepNever',
++        'UserAttachmentLifetime': 'keepAlways',
+         'TestingEnvironmentVariables': test_envs,
+         'DependentProductPaths': [
+             self._app_under_test_dir,
+             self._test_bundle_dir],
+     }
+ 
+   def _GetUitestRunnerAppFromXcode(self, platform_library_path):
+     """Gets the test runner app for uitest from Xcode directory.

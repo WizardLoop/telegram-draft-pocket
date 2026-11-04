@@ -32,6 +32,20 @@ index 242e45b324266c6113edb7ccc21cb11152b6873f..a2118708da797f069821016816d0db0c
 +"DraftPocket.SendNotPrepared" = "The media could not be preserved. Your message has not been sent and the draft is unchanged.";
 +"DraftPocket.SendChanged" = "The draft changed while preparing to send. Your current text has been kept. Any saved recovery is in Draft Pocket.";
 +"DraftPocket.MediaRecoveryUnavailable" = "Some saved media could not be recovered. Affected messages are paused; their drafts have not been deleted.";
+diff --git a/Tests/ComposerHarness/AppContext/HarnessSharedAccountContext+Generated.swift b/Tests/ComposerHarness/AppContext/HarnessSharedAccountContext+Generated.swift
+index 2a15f092784ef07850bdaee1f37355671de617a8..02b2b934225ef03eac830b0881359d614d37ba58 100644
+--- a/Tests/ComposerHarness/AppContext/HarnessSharedAccountContext+Generated.swift
++++ b/Tests/ComposerHarness/AppContext/HarnessSharedAccountContext+Generated.swift
+@@ -598,6 +598,9 @@ extension HarnessSharedAccountContext {
+     public func makeShareController(context: AccountContext, params: ShareControllerParams) -> ViewController {
+         fatalError("harness: SharedAccountContext.makeShareController is not provided")
+     }
++    public func makeShareScreen(context: AccountContext, params: ShareControllerParams) -> ViewController {
++        fatalError("harness: SharedAccountContext.makeShareScreen is not provided")
++    }
+     public func makeMiniAppListScreenInitialData(context: AccountContext) -> Signal<MiniAppListScreenInitialData, NoError> {
+         fatalError("harness: SharedAccountContext.makeMiniAppListScreenInitialData is not provided")
+     }
 diff --git a/Tests/ComposerHarness/BUILD b/Tests/ComposerHarness/BUILD
 index 7a8590d5d3cfa96dde5c8a7151d15128a4fbc144..bcaa87b7e7b2af870bb6c09d89327cd3503c5f17 100644
 --- a/Tests/ComposerHarness/BUILD
@@ -1589,14 +1603,15 @@ index 1f8b01ee472b353933b8a478fd96333fbbaa647d..354d8eb687c838597b12643dc4b648e2
      var isEditorFirstResponder: Bool { get }
      func resignEditorFirstResponder() -> Bool
 diff --git a/submodules/TelegramUI/Sources/ChatController.swift b/submodules/TelegramUI/Sources/ChatController.swift
-index 5fe58bbf51f3e27c0c06f453b59938c97fc6faa7..5961d2c90bbc684ab209d77b872c0ccaf76a82d5 100644
+index 5fe58bbf51f3e27c0c06f453b59938c97fc6faa7..27940ba8c9d16c8cdcf201d9f2cec2877e35c4aa 100644
 --- a/submodules/TelegramUI/Sources/ChatController.swift
 +++ b/submodules/TelegramUI/Sources/ChatController.swift
-@@ -267,6 +267,12 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+@@ -267,6 +267,13 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
      var contentData: ChatControllerImpl.ContentData?
      let contentDataReady = ValuePromise<Bool>(false, ignoreRepeated: true)
      var contentDataDisposable: Disposable?
 +    var draftPocketOperationInProgress = false
++    var draftPocketComposerGeneration: UInt64 = 0
 +    var draftPocketHasActiveToken = false
 +    var draftPocketExpectedActiveToken: Data?
 +    var draftPocketView: DraftPocketView?
@@ -1605,7 +1620,58 @@ index 5fe58bbf51f3e27c0c06f453b59938c97fc6faa7..5961d2c90bbc684ab209d77b872c0cca
      var newTopicEventsDisposable: Disposable?
      var didHandlePerformDismissAction: Bool = false
      var didInitializePersistentPeerInterfaceData: Bool = false
-@@ -7082,6 +7088,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+@@ -2408,6 +2415,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+                 }
+             }
+             
++            let inputClearGuard = strongSelf.capturePendingInputClear()
+             var attributes: [MessageAttribute] = []
+             if let query = query {
+                 attributes.append(EmojiSearchQueryMessageAttribute(query: query))
+@@ -2483,6 +2491,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+                 if silentPosting {
+                     strongSelf.chatDisplayNode.setupSendActionOnViewUpdate({
+                         if let strongSelf = self {
++                            guard strongSelf.canApplyPendingInputClear(inputClearGuard) else { return }
+                             strongSelf.chatDisplayNode.collapseInput()
+                             
+                             strongSelf.updateChatPresentationInterfaceState(animated: true, interactive: false, { current in
+@@ -2512,6 +2521,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+                 } else if schedule {
+                     strongSelf.chatDisplayNode.setupSendActionOnViewUpdate({
+                         if let strongSelf = self {
++                            guard strongSelf.canApplyPendingInputClear(inputClearGuard) else { return }
+                             strongSelf.chatDisplayNode.collapseInput()
+                             
+                             strongSelf.updateChatPresentationInterfaceState(animated: true, interactive: false, { current in
+@@ -2580,8 +2590,10 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+                             }
+                         }
+ 
++                        let routedInputClearGuard = overrideThreadId.map { inputClearGuard.withUpdatedThreadId($0) } ?? inputClearGuard
+                         strongSelf.chatDisplayNode.setupSendActionOnViewUpdate({
+                             if let strongSelf = self {
++                                guard strongSelf.canApplyPendingInputClear(routedInputClearGuard) else { return }
+                                 strongSelf.chatDisplayNode.collapseInput()
+ 
+                                 strongSelf.updateChatPresentationInterfaceState(animated: true, interactive: false, { current in
+@@ -3515,6 +3527,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+                 if let messageId, Namespaces.Message.allEphemeral.contains(messageId.namespace) {
+                     return
+                 }
++                let inputClearGuard = strongSelf.capturePendingInputClear()
+                 strongSelf.chatDisplayNode.setupSendActionOnViewUpdate({}, nil)
+                 var postAsReply = false
+                 if !command.contains("@") {
+@@ -3539,6 +3552,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+                 
+                 strongSelf.chatDisplayNode.setupSendActionOnViewUpdate({
+                     if let strongSelf = self {
++                        guard strongSelf.canApplyPendingInputClear(inputClearGuard) else { return }
+                         strongSelf.chatDisplayNode.collapseInput()
+                         
+                         strongSelf.updateChatPresentationInterfaceState(animated: true, interactive: false, {
+@@ -7082,6 +7096,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
      }
  
      deinit {
@@ -1613,7 +1679,7 @@ index 5fe58bbf51f3e27c0c06f453b59938c97fc6faa7..5961d2c90bbc684ab209d77b872c0cca
          let _ = ChatControllerCount.modify { value in
              return value - 1
          }
-@@ -7686,6 +7693,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+@@ -7686,6 +7701,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
      
      override public func loadDisplayNode() {
          self.loadDisplayNodeImpl()
@@ -1621,7 +1687,7 @@ index 5fe58bbf51f3e27c0c06f453b59938c97fc6faa7..5961d2c90bbc684ab209d77b872c0cca
          self.galleryPresentationContext.view = self.view
          self.galleryPresentationContext.controllersUpdated = { [weak self] _ in
              guard let self else {
-@@ -8354,6 +8362,8 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+@@ -8354,6 +8370,8 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
      }
      
      func saveInterfaceState(includeScrollState: Bool = true) {
@@ -1630,7 +1696,7 @@ index 5fe58bbf51f3e27c0c06f453b59938c97fc6faa7..5961d2c90bbc684ab209d77b872c0cca
          if case .messageOptions = self.subject {
              return
          }
-@@ -8390,9 +8400,19 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+@@ -8390,9 +8408,19 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
              interfaceState = interfaceState.withUpdatedHistoryScrollState(scrollState)
          }
          interfaceState = interfaceState.withUpdatedInputLanguage(self.chatDisplayNode.currentTextInputLanguage)
@@ -1640,7 +1706,7 @@ index 5fe58bbf51f3e27c0c06f453b59938c97fc6faa7..5961d2c90bbc684ab209d77b872c0cca
 +        if interfaceState.mediaDraftState == nil, let opaqueData = try? EngineEncoder.encode(interfaceState) {
 +            let opaqueState = OpaqueChatInterfaceState(opaqueData: opaqueData, historyScrollMessageIndex: interfaceState.historyScrollMessageIndex, mediaDraftState: nil, synchronizeableInputState: interfaceState.synchronizeableInputState)
 +            let expectedToken = try? draftPocketActiveStateToken(opaqueState)
-+            let _ = (self.context.engine.peers.setOpaqueChatInterfaceState(peerId: peerId, threadId: threadId, state: opaqueState)
++            let _ = (self.context.engine.peers.setOpaqueChatInterfaceState(peerId: peerId, threadId: threadId, state: opaqueState, retainedDraftResourceIds: draftPocketRetainedResourceIds(in: interfaceState.composeInputState.content))
 +            |> deliverOnMainQueue).startStandalone(completed: { [weak self] in
 +                self?.draftPocketExpectedActiveToken = expectedToken
 +                self?.draftPocketHasActiveToken = true
@@ -1653,8 +1719,24 @@ index 5fe58bbf51f3e27c0c06f453b59938c97fc6faa7..5961d2c90bbc684ab209d77b872c0cca
          
          self.context.engine.peers.setPerstistentChatInterfaceState(peerId: peerId, state: CodableEntry(self.presentationInterfaceState.persistentData))
      }
+@@ -9526,6 +9554,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+             return
+         }
+         
++        let inputClearGuard = self.capturePendingInputClear()
+         var isScheduledMessages = false
+         if case .scheduledMessages = self.presentationInterfaceState.subject {
+             isScheduledMessages = true
+@@ -9541,6 +9570,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+             if self.context.engine.messages.enqueueOutgoingMessageWithChatContextResult(to: peerId, threadId: self.chatLocation.threadId, botId: results.botId, result: result, replyToMessageId: replyMessageSubject?.subjectModel, hideVia: hideVia, silentPosting: silentPosting, scheduleTime: scheduleTime, sendPaidMessageStars: sendPaidMessageStars, postpone: postpone) {
+                 self.chatDisplayNode.setupSendActionOnViewUpdate({ [weak self] in
+                     if let strongSelf = self {
++                        guard strongSelf.canApplyPendingInputClear(inputClearGuard) else { return }
+                         strongSelf.chatDisplayNode.collapseInput()
+                         
+                         strongSelf.updateChatPresentationInterfaceState(animated: true, interactive: true, { state in
 diff --git a/submodules/TelegramUI/Sources/ChatControllerNode.swift b/submodules/TelegramUI/Sources/ChatControllerNode.swift
-index ee5838449d59b1c0631b319620f5f900d8aba298..a26d9d3aa42014f80b990354d42beb31f85f2af6 100644
+index ee5838449d59b1c0631b319620f5f900d8aba298..4be729329a84db032a129ff51496abe8deda3765 100644
 --- a/submodules/TelegramUI/Sources/ChatControllerNode.swift
 +++ b/submodules/TelegramUI/Sources/ChatControllerNode.swift
 @@ -344,6 +344,8 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
@@ -1677,13 +1759,13 @@ index ee5838449d59b1c0631b319620f5f900d8aba298..a26d9d3aa42014f80b990354d42beb31
          self.textInputPanelNode?.updateActivity = { [weak self] in
              self?.updateTypingActivity(true)
          }
-@@ -5005,6 +5011,106 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+@@ -5005,6 +5011,107 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
          }
      }
      
 +    /// Snapshot the actual outgoing composer before media transforms or history callbacks
 +    /// can release its active resource owner. Preparation never dismisses the keyboard.
-+    private func prepareDraftPocketMessageSend(_ source: ChatPresentationInterfaceState, send: @escaping (String?) -> Void) {
++    private func prepareDraftPocketMessageSend(_ source: ChatPresentationInterfaceState, inputClearGuard: ChatInputClearGuard, send: @escaping (String?) -> Void) {
 +        let input = source.interfaceState.composeInputState
 +        let hasLocalEmoji = input.content.draftPocketCustomEmojiFiles().values.contains {
 +            $0.resource is LocalFileMediaResource || $0.resource is LocalFileReferenceMediaResource
@@ -1702,7 +1784,8 @@ index ee5838449d59b1c0631b319620f5f900d8aba298..a26d9d3aa42014f80b990354d42beb31
 +        let captured = source.interfaceState.withUpdatedInputLanguage(self.textInputPanelNode?.effectiveInputLanguage)
 +        let unchanged: (ChatControllerNode) -> Bool = { node in
 +            let current = node.chatPresentationInterfaceState.interfaceState
-+            return node.chatLocation.peerId == peerId && node.chatLocation.threadId == threadId
++            return node.controller?.canApplyPendingInputClear(inputClearGuard, allowMarkedText: true) == true
++                && node.chatLocation.peerId == peerId && node.chatLocation.threadId == threadId
 +                && node.textInputPanelNode?.inputTextState == input
 +                && current.replyMessageSubject == captured.replyMessageSubject
 +                && current.composeDisableUrlPreviews == captured.composeDisableUrlPreviews
@@ -1784,7 +1867,30 @@ index ee5838449d59b1c0631b319620f5f900d8aba298..a26d9d3aa42014f80b990354d42beb31
      func maybeSendEphemeralMessage(sendNormally: @escaping () -> Void) {
          var isScheduledMessages = false
          if case .scheduledMessages = self.chatPresentationInterfaceState.subject {
-@@ -5051,6 +5157,7 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+@@ -5014,12 +5121,14 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+         let interfaceState = self.chatPresentationInterfaceState.interfaceState
+         let inputText = interfaceState.effectiveInputState.inputText.string
+         if !isScheduledMessages, interfaceState.editMessage == nil, interfaceState.postSuggestionState == nil, interfaceState.forwardMessageIds == nil, let peerId = self.chatLocation.peerId, mayContainTypedEphemeralBotCommand(inputText) {
++            let inputClearGuard = self.controller?.capturePendingInputClear()
+             let _ = (self.context.engine.peers.peerCommands(id: peerId)
+             |> take(1)
+             |> deliverOnMainQueue).startStandalone(next: { [weak self] peerCommands in
+                 guard let self else {
+                     return
+                 }
++                guard let inputClearGuard, self.controller?.canApplyPendingInputClear(inputClearGuard, allowMarkedText: true) == true else { return }
+ 
+                 if let resolved = resolveEphemeralBotCommand(text: inputText, peerCommands: peerCommands) {
+                     let replyMessageSubject = self.chatPresentationInterfaceState.interfaceState.replyMessageSubject
+@@ -5027,6 +5136,7 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+                         guard let strongSelf = self else {
+                             return
+                         }
++                        guard strongSelf.controller?.canApplyPendingInputClear(inputClearGuard) == true else { return }
+                         strongSelf.collapseInput()
+ 
+                         strongSelf.controller?.updateChatPresentationInterfaceState(animated: true, interactive: false, {
+@@ -5051,6 +5161,7 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
      }
  
      func sendCurrentMessage(silentPosting: Bool? = nil, scheduleTime: Int32? = nil, repeatPeriod: Int32? = nil, postpone: Bool = false, messageEffect: ChatSendMessageEffect? = nil, sendWithoutFormatting: Bool = false, completion: @escaping () -> Void = {}) {
@@ -1792,7 +1898,16 @@ index ee5838449d59b1c0631b319620f5f900d8aba298..a26d9d3aa42014f80b990354d42beb31
          guard let textInputPanelNode = self.inputPanelNode as? ChatTextInputPanelNode else {
              return
          }
-@@ -5419,11 +5526,30 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+@@ -5066,6 +5177,8 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+             effectivePresentationInterfaceState = effectivePresentationInterfaceState.updatedInterfaceState { $0.withUpdatedEffectiveInputState(textInputPanelNode.inputTextState) }
+         }
+         
++        let inputClearGuard = ChatInputClearGuard(peerId: self.chatLocation.peerId, threadId: self.chatLocation.threadId, generation: self.controller?.draftPocketComposerGeneration ?? 0, input: effectivePresentationInterfaceState.interfaceState.composeInputState, state: effectivePresentationInterfaceState.interfaceState)
++
+         if let _ = effectivePresentationInterfaceState.interfaceState.editMessage, effectivePresentationInterfaceState.interfaceState.postSuggestionState == nil {
+             self.interfaceInteraction?.editMessage()
+         } else {
+@@ -5419,11 +5532,35 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
                      }
                  }
                  
@@ -1802,6 +1917,11 @@ index ee5838449d59b1c0631b319620f5f900d8aba298..a26d9d3aa42014f80b990354d42beb31
                          return
                      }
 -                    
++                    let routedInputClearGuard = overrideThreadId.map { inputClearGuard.withUpdatedThreadId($0) } ?? inputClearGuard
++                    guard self.controller?.canApplyPendingInputClear(routedInputClearGuard, allowMarkedText: retentionOperationId == nil) == true else {
++                        self.draftPocketSendNotice(DraftPocketStrings(self.chatPresentationInterfaceState.strings).sendChanged)
++                        return
++                    }
 +                    if retentionOperationId != nil {
 +                        // Thread transfer is asynchronous too. Recheck before invoking a
 +                        // completion that may clear the composer (including When Online).
@@ -1825,7 +1945,7 @@ index ee5838449d59b1c0631b319620f5f900d8aba298..a26d9d3aa42014f80b990354d42beb31
                      var messages = messages
                      if let overrideThreadId {
                          messages = messages.map { message in
-@@ -5431,6 +5557,16 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+@@ -5431,6 +5568,16 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
                          }
                      }
                      
@@ -1842,10 +1962,11 @@ index ee5838449d59b1c0631b319620f5f900d8aba298..a26d9d3aa42014f80b990354d42beb31
                      var usedCorrelationId: Int64?
                      if !messages.isEmpty, case .message = messages[messages.count - 1] {
                          let correlationId = Int64.random(in: 0 ..< Int64.max)
-@@ -5456,6 +5592,18 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+@@ -5456,6 +5603,19 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
                          guard let self, let textInputPanelNode = self.inputPanelNode as? ChatTextInputPanelNode else {
                              return
                          }
++                        guard self.controller?.canApplyPendingInputClear(routedInputClearGuard) == true else { return }
 +                        if retentionOperationId != nil {
 +                            // Media transforms can finish after the user resumes typing. The
 +                            // prepared outgoing snapshot is durable; newer input must survive.
@@ -1861,7 +1982,7 @@ index ee5838449d59b1c0631b319620f5f900d8aba298..a26d9d3aa42014f80b990354d42beb31
                          self.collapseInput()
                          
                          self.ignoreUpdateHeight = true
-@@ -5506,21 +5654,25 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+@@ -5506,21 +5666,25 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
                      }
                  }
                  
@@ -1883,7 +2004,7 @@ index ee5838449d59b1c0631b319620f5f900d8aba298..a26d9d3aa42014f80b990354d42beb31
 +                // Prepare before thread transfer, clear-on-history registration, and
 +                // completion (Send When Online clears inside that callback). A new-topic
 +                // transfer can release the original thread's active resource owner too.
-+                self.prepareDraftPocketMessageSend(effectivePresentationInterfaceState) { [weak self] retentionOperationId in
++                self.prepareDraftPocketMessageSend(effectivePresentationInterfaceState, inputClearGuard: inputClearGuard) { [weak self] retentionOperationId in
 +                    guard let self else { return }
 +                    if let targetThreadId {
 +                        self.historyNode.stopHistoryUpdates()

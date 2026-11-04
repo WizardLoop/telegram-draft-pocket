@@ -10,6 +10,10 @@ Pinned revision: `279f89e4d4f63f17227bf877dc3d8990f22ecd58`.
 
 The integration patch modifies Telegram source. Telegram and its contributors retain their existing rights and notices. Telegram's [official applications page](https://telegram.org/apps) identifies the iOS source license as GNU GPL version 2 or later. This pinned tree does not contain a root LICENSE file; this package includes the GPL v2 text and distributes its additions under GPL-2.0-or-later. Individual upstream dependencies retain their own licenses; they are fetched at upstream's recorded commits, not redistributed in this repository.
 
+## XCTest runner attachment retention
+
+The optional demo includes a one-field patch to Google's [xctestrunner](https://github.com/google/xctestrunner/blob/4c6f4931aa65b3e6573b3ca11753c98fc8d3071c/xctestrunner/test_runner/xctestrun.py), pinned at `4c6f4931aa65b3e6573b3ca11753c98fc8d3071c` (Bazel version `0.2.16-20260212-4c6f493`). Copyright 2017 Google Inc., Apache License 2.0; the original [license text](docs/licenses/xctestrunner-Apache-2.0.txt) is included. The modification changes only UI tests' custom attachment lifetime from `keepNever` to `keepAlways`; it does not enable automatic screenshots or upgrade the runner. The original source header remains unchanged when applying the patch.
+
 ## Presentation references
 
 - https://github.com/riveauxmia/telegram-unmute-similar

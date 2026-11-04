@@ -1,3 +1,31 @@
+diff --git a/MODULE.bazel b/MODULE.bazel
+--- a/MODULE.bazel
++++ b/MODULE.bazel
+@@ -210,6 +210,15 @@
+     path = "./build-system/bazel-rules/rules_apple",
+ )
+ 
++# Optional Draft Pocket demo: retain explicitly attached XCTest screenshots.
++# Same transitive version selected by pinned rules_apple; no dependency upgrade.
++single_version_override(
++    module_name = "xctestrunner",
++    version = "0.2.16-20260212-4c6f493",
++    patches = ["//build-system:draft-pocket-xctestrunner.patch"],
++    patch_strip = 1,
++)
++
+ bazel_dep(name = "rules_swift", repo_name = "build_bazel_rules_swift")
+ local_path_override(
+     module_name = "rules_swift",
+diff --git a/build-system/BUILD b/build-system/BUILD
+--- a/build-system/BUILD
++++ b/build-system/BUILD
+@@ -22,4 +22,5 @@
+ 
+ exports_files([
+     "GenerateStrings/GenerateStrings.py",
++    "draft-pocket-xctestrunner.patch",
+ ])
 diff --git a/submodules/TelegramCore/Sources/Network/Network.swift b/submodules/TelegramCore/Sources/Network/Network.swift
 --- a/submodules/TelegramCore/Sources/Network/Network.swift
 +++ b/submodules/TelegramCore/Sources/Network/Network.swift
@@ -225,7 +253,7 @@ diff --git a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Source
 diff --git a/submodules/TelegramUI/Sources/ChatController.swift b/submodules/TelegramUI/Sources/ChatController.swift
 --- a/submodules/TelegramUI/Sources/ChatController.swift
 +++ b/submodules/TelegramUI/Sources/ChatController.swift
-@@ -8553,6 +8553,9 @@
+@@ -8561,6 +8561,9 @@
              f,
              completion: completion
          )

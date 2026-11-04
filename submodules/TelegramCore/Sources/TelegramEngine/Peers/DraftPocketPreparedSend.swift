@@ -58,6 +58,9 @@ func _internal_prepareDraftPocketSend(postbox: Postbox, peerId: PeerId, threadId
                     }
                     let preparation = try DraftPocketMediaPreparation(mediaBox: postbox.mediaBox, sources: sources)
                     disposable.set(postbox.transaction { transaction -> (DraftPocketSendPreparationResult, DraftPocketMediaPreparation) in
+                        // This runs even when cancellation suppresses the transaction's next
+                        // callback. The queued collector waits until the result-held lease ends.
+                        defer { draftPocketSchedulePreparationCollection(postbox: postbox) }
                         do {
                             var graph = try DraftPocketMediaOwnership.read(transaction: transaction)
                             guard graph.entries.contains(where: { $0.owner == .active(peerId: peerId, threadId: threadId) }) else { return (.failure(.conflict), preparation) }
@@ -79,13 +82,19 @@ func _internal_prepareDraftPocketSend(postbox: Postbox, peerId: PeerId, threadId
                         preparation.session.finish()
                         subscriber.putNext(result)
                         subscriber.putCompletion()
+                        draftPocketSchedulePreparationCollection(postbox: postbox)
                     }))
                 } catch {
-                    subscriber.putNext(.failure(.mediaRetentionUnavailable))
-                    subscriber.putCompletion()
+                    draftPocketFinishPreparationFailure(postbox: postbox) {
+                        subscriber.putNext(.failure(.mediaRetentionUnavailable))
+                        subscriber.putCompletion()
+                    }
                 }
             }
-            return disposable
+            return ActionDisposable {
+                disposable.dispose()
+                draftPocketSchedulePreparationCollection(postbox: postbox)
+            }
         }
     }
 }

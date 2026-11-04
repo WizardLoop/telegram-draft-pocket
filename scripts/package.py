@@ -576,6 +576,29 @@ def make_command(checkout, config, cache, command):
             "--disableProvisioningProfiles"]
 
 
+def run_native_tests(checkout, configuration, cache, targets):
+    if not targets:
+        raise PackageError("No native feature test targets are registered in BASE.json")
+    # Validate the complete inventory before starting any target, then retain
+    # independent results even when an earlier target fails to compile or run.
+    specifications = [native_test_spec(entry) for entry in targets]
+    failures = []
+    for target, selection in specifications:
+        identity = target + (f" [{selection}]" if selection else "")
+        print(f"Starting native test target: {identity}", flush=True)
+        selection_args = ["--testFilter", selection] if selection else []
+        try:
+            run(make_command(checkout, configuration, cache, "test") + ["--target", target, *selection_args],
+                cwd=checkout, capture=False)
+        except (PackageError, OSError) as error:
+            failures.append(f"{identity}: {error}")
+            print(f"Native test target FAILED: {failures[-1]}", file=sys.stderr, flush=True)
+        else:
+            print(f"Native test target PASSED: {identity}", flush=True)
+    if failures:
+        raise PackageError(f"{len(failures)} of {len(specifications)} native test targets failed:\n" + "\n".join(failures))
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -641,16 +664,10 @@ def main(argv=None):
             raise PackageError("Packaging tests failed or no tests ran")
         validate_package(ROOT, args.with_demo)
         if args.native:
-            if not args.checkout or not args.cache:
+            if not args.checkout or not args.configuration or not args.cache:
                 raise PackageError("Native tests require --checkout, --configuration and --cache")
             base = toolchain(ROOT, args.checkout, args.configuration, args.with_demo)
-            targets = base.get("native_test_targets", [])
-            if not targets:
-                raise PackageError("No native feature test targets are registered in BASE.json")
-            for entry in targets:
-                target, selection = native_test_spec(entry)
-                selection_args = ["--testFilter", selection] if selection else []
-                run(make_command(args.checkout, args.configuration.resolve(), args.cache.resolve(), "test") + ["--target", target, *selection_args], cwd=args.checkout, capture=False)
+            run_native_tests(args.checkout, args.configuration.resolve(), args.cache.resolve(), base.get("native_test_targets", []))
         else:
             print("Packaging tests PASS. Native feature tests, iOS build, UI/runtime and capture NOT RUN.")
 

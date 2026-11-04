@@ -253,4 +253,78 @@ final class DraftPocketMediaLifecycleTests: XCTestCase {
         let untracked = try self.value(_internal_draftPocketSendRequiresRetention(postbox: self.postbox, peerId: self.peerId, threadId: nil, resourceIds: ["local-file-never-retained"]))
         XCTAssertFalse(try untracked.get())
     }
+
+    func testRegularComposerAutosaveReleasesActiveOwnerButKeepsPendingBytesUntilDeletion() throws {
+        let (snapshot, resource, bytes, external) = try self.restoredReference()
+        let operationId = try self.prepare(snapshot)
+        let messageId = MessageId(peerId: self.peerId, namespace: Namespaces.Message.Local, id: 171)
+        let file = try XCTUnwrap(snapshot.content.allMedia.first?._asMedia())
+        let message = StoreMessage(id: messageId, customStableId: nil, globallyUniqueId: 1710, groupingKey: nil, threadId: nil, timestamp: 1000, flags: [.Sending], tags: [], globalTags: [], localTags: [], forwardInfo: nil, authorId: nil, text: "caption", attributes: [DraftPocketSendRetentionAttribute(operationId: operationId)], media: [file])
+        let preparation = try DraftPocketMediaPreparation(mediaBox: self.postbox.mediaBox, sources: [resource.id: external.path])
+        _ = try self.transaction { transaction -> DraftPocketMediaPreparation in
+            let data = try XCTUnwrap(try draftPocketPendingOwnershipData(transaction: transaction, peerId: self.peerId, messages: [message], preparation: preparation))
+            DraftPocketMediaOwnership.commitEncoded(data, transaction: transaction)
+            _ = transaction.addMessages([message], location: .Random)
+            return preparation
+        }
+        preparation.session.finish()
+        try FileManager.default.removeItem(at: external)
+
+        // The ordinary saveInterfaceState fast path uses this exact engine transaction helper
+        // and passes the canonical empty composer IDs after the send animation clears input.
+        let cleared = self.opaque("")
+        let expectedToken = try draftPocketActiveStateToken(cleared)
+        try self.transaction { transaction in
+            XCTAssertTrue(_internal_setOpaqueChatInterfaceState(transaction: transaction, peerId: self.peerId, threadId: nil, state: cleared, retainedDraftResourceIds: draftPocketRetainedResourceIds(in: ChatInputContent())))
+            XCTAssertEqual(transaction.getPeerChatInterfaceState(self.peerId)?.data, expectedToken)
+            let graph = try DraftPocketMediaOwnership.read(transaction: transaction)
+            XCTAssertFalse(graph.entries.contains { $0.owner == .active(peerId: self.peerId, threadId: nil) })
+            XCTAssertTrue(graph.entries.contains { $0.owner.kind == 4 && $0.owner.globallyUniqueId == 1710 })
+        }
+        XCTAssertTrue(try self.value(_internal_collectDraftPocketMedia(postbox: self.postbox)))
+        XCTAssertEqual(try self.value(self.postbox.mediaBox.removeCachedResourcesWithResult([resource.id], force: true)), [])
+        let retained = try self.value(self.postbox.mediaBox.resourceData(resource, attemptSynchronously: true))
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: retained.path)), bytes)
+
+        try self.transaction { transaction in
+            _internal_deleteMessages(transaction: transaction, mediaBox: self.postbox.mediaBox, ids: [messageId], deleteMedia: false)
+        }
+        XCTAssertTrue(try self.value(_internal_collectDraftPocketMedia(postbox: self.postbox)))
+        try self.transaction { transaction in
+            XCTAssertTrue(try DraftPocketMediaOwnership.read(transaction: transaction).entries.isEmpty)
+        }
+        XCTAssertEqual(try self.value(self.postbox.mediaBox.removeCachedResourcesWithResult([resource.id], force: true)), [resource.id])
+    }
+
+    func testFailedMultiResourcePreparationCollectsItsPartialArchiveWithoutAnAccountTimer() throws {
+        let good = LocalFileMediaResource(fileId: 101)
+        let missing = LocalFileMediaResource(fileId: 102)
+        // Production preparation orders by stable resource ID; no Dictionary iteration order
+        // decides whether the complete source is staged before the missing source fails.
+        XCTAssertLessThan(good.id.stringRepresentation, missing.id.stringRepresentation)
+        let bytes = Data(repeating: 0x5a, count: 10_007)
+        self.postbox.mediaBox.storeResourceData(good.id, data: bytes, synchronous: true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: self.postbox.mediaBox.resourcePath(missing)))
+        func file(_ resource: LocalFileMediaResource, id: Int64) -> TelegramMediaFile {
+            return TelegramMediaFile(fileId: MediaId(namespace: Namespaces.Media.LocalFile, id: id), partialReference: nil, resource: resource, previewRepresentations: [], videoThumbnails: [], immediateThumbnailData: nil, mimeType: "video/mp4", size: Int64(bytes.count), attributes: [], alternativeRepresentations: [])
+        }
+        let content = ChatInputContent(blocks: [.media(ChatInputMedia(items: [
+            ChatInputMediaItem(media: file(good, id: 101), kind: .video, naturalSize: ChatInputSize(width: 40, height: 30)),
+            ChatInputMediaItem(media: file(missing, id: 102), kind: .video, naturalSize: ChatInputSize(width: 40, height: 30))
+        ]))])
+        let snapshot = try DraftPocketSnapshot(content: content, selection: ChatInputSelection(nsRange: NSRange(location: 0, length: 0), in: content), state: self.opaque("two attachments"))
+        let before = try self.view()
+        self.assertFailure(try self.perform(.putAside(snapshot: snapshot, clearedState: self.opaque(""))), .mediaRetentionUnavailable)
+        let after = try self.view()
+        XCTAssertEqual(after.revision, before.revision)
+        XCTAssertEqual(after.activeStateToken, before.activeStateToken)
+        XCTAssertTrue(after.items.isEmpty)
+        // This fixture has no Account/managed-collection timer and makes no manual collection
+        // call: the failure path itself must finish cleanup before reporting its failure.
+        let session = try self.postbox.mediaBox.draftResourceRetention.beginSession()
+        XCTAssertTrue(try session.pinnedResources().isEmpty)
+        session.finish()
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: self.postbox.mediaBox.resourcePath(good))), bytes)
+        XCTAssertEqual(try self.value(self.postbox.mediaBox.removeCachedResourcesWithResult([good.id], force: true)), [good.id])
+    }
 }

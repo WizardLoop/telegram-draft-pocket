@@ -17,10 +17,10 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import package
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifacts", type=Path, required=True)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     args.artifacts.mkdir(parents=True, exist_ok=True)
     status = {"schema_version": 1, "started_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
               "feature_commit": os.environ.get("DRAFT_POCKET_FEATURE_COMMIT"),
@@ -61,6 +61,16 @@ def main():
             code = process.wait()
         if code:
             raise package.PackageError(f"{name} exited {code}; see its redacted log")
+
+    def record_failure(name, error):
+        message = redact(str(error))
+        status["stages"][name] = "failed"
+        status.setdefault("failures", {})[name] = message
+        status["failure"] = "\n".join(f"{key}: {value}" for key, value in status["failures"].items())
+        print(f"error ({name}): {message}", file=sys.stderr, flush=True)
+        (args.artifacts / f"{name}-failure.txt").write_text(message + "\n", encoding="utf-8")
+        (args.artifacts / "failure.txt").write_text(status["failure"] + "\n", encoding="utf-8")
+        save()
 
     stage = "package_integrity"
     status["stages"][stage] = "running"
@@ -147,27 +157,34 @@ def main():
                          "--configuration", configuration, "--cache", temporary / "draft-pocket-bazel-cache",
                          "--build-number", build_number, *demo_flags])
         status["stages"][stage] = "passed"
+        # Both checks depend on a built app, but capture does not depend on every
+        # independent native test target compiling. Preserve failure and continue.
         stage = "native_tests"
         status["stages"][stage] = "running"
         save()
-        invoke("native-tests", [sys.executable, ROOT / "scripts/package.py", "test", "--native",
-                                "--checkout", checkout, "--configuration", configuration,
-                                "--cache", temporary / "draft-pocket-bazel-cache", *demo_flags])
-        status["stages"][stage] = "passed"
+        try:
+            invoke("native-tests", [sys.executable, ROOT / "scripts/package.py", "test", "--native",
+                                    "--checkout", checkout, "--configuration", configuration,
+                                    "--cache", temporary / "draft-pocket-bazel-cache", *demo_flags])
+        except (package.PackageError, OSError, ValueError, KeyError) as error:
+            record_failure(stage, error)
+        else:
+            status["stages"][stage] = "passed"
         stage = "capture"
         status["stages"][stage] = "running"
         save()
-        if not manifest.get("demo", {}).get("available"):
-            raise package.PackageError("Real demo capture is blocked: the package has no isolated full-client offline fixture. No capture was produced and no account was opened")
-        invoke("capture", [sys.executable, ROOT / "scripts/capture-demo.py", "--checkout", checkout,
-                           "--configuration", configuration, "--cache", temporary / "draft-pocket-bazel-cache",
-                           "--artifacts", args.artifacts])
-        status["stages"][stage] = "passed"
+        try:
+            if not manifest.get("demo", {}).get("available"):
+                raise package.PackageError("Real demo capture is blocked: the package has no isolated full-client offline fixture. No capture was produced and no account was opened")
+            invoke("capture", [sys.executable, ROOT / "scripts/capture-demo.py", "--checkout", checkout,
+                               "--configuration", configuration, "--cache", temporary / "draft-pocket-bazel-cache",
+                               "--artifacts", args.artifacts])
+        except (package.PackageError, OSError, ValueError, KeyError) as error:
+            record_failure(stage, error)
+        else:
+            status["stages"][stage] = "passed"
     except (package.PackageError, OSError, ValueError, KeyError) as error:
-        status["stages"][stage] = "failed"
-        status["failure"] = redact(str(error))
-        print("error: " + status["failure"], file=sys.stderr)
-        (args.artifacts / "failure.txt").write_text(status["failure"] + "\n", encoding="utf-8")
+        record_failure(stage, error)
         return 1
     finally:
         status["finished_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -183,7 +200,7 @@ def main():
                     output.write(f"| {name} | {result} |\n")
                 if status.get("failure"):
                     output.write("\n" + status["failure"].replace("\n", " ") + "\n")
-    return 0
+    return 1 if status.get("failures") else 0
 
 
 if __name__ == "__main__":
