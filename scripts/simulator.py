@@ -1,6 +1,7 @@
 """Own one fresh Simulator, bound its lifecycle, and preserve startup evidence."""
 
 import datetime
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -43,7 +44,7 @@ class SimulatorSession:
                 raise
             self._cleanup_evidence_errors.append(f"{name} evidence: {error}")
 
-    def _run(self, name, command, timeout=30, *, public_output=True, allowed_codes=(0,), cleanup=False):
+    def _run(self, name, command, timeout=30, *, public_output=True, allowed_codes=(0,), cleanup=False, cwd=None):
         phase = {"name": name, "started_utc": utc_now(), "timeout_seconds": timeout, "status": "running"}
         self.evidence["phases"].append(phase)
         self._persist_command_evidence(self._save, name, cleanup)
@@ -51,7 +52,7 @@ class SimulatorSession:
         output = b""
         try:
             result = subprocess.run([str(arg) for arg in command], stdout=subprocess.PIPE,
-                                    stderr=subprocess.STDOUT, timeout=timeout, check=False)
+                                    stderr=subprocess.STDOUT, timeout=timeout, check=False, cwd=cwd)
             output = result.stdout or b""
             phase["returncode"] = result.returncode
             if result.returncode not in allowed_codes:
@@ -88,7 +89,11 @@ class SimulatorSession:
                 if key == "processes":
                     # Never record argv/environment or unrelated process names.
                     output = "\n".join(line for line in output.splitlines()
-                        if re.search(r"(?:CoreSimulator|Simulator\.app|launchd_sim|simctl|/java)(?:/|\s|$)", line))
+                        if len(line.split(None, 3)) == 4 and re.search(
+                            r"(?:CoreSimulator|Simulator\.app)(?:[./]|$)|"
+                            r"(?:^|/)(?:launchd_sim|simctl|java|swift_worker|swiftc|swift-frontend|"
+                            r"bazel(?:-[0-9][\w.-]*|\([^\r\n]*\))?)(?:$)",
+                            line.split(None, 3)[3]))
                 snapshot[key] = output[:32 * 1024]
             except (package.PackageError, OSError) as error:
                 snapshot[key + "_error"] = str(error)
@@ -107,6 +112,82 @@ class SimulatorSession:
             snapshot["device_state_error"] = str(error)
         self.evidence["health"].append(snapshot)
         self._save()
+
+    def release_build_server(self, checkout):
+        """Release only this hosted task's verified Bazel server before OS boot.
+
+        Shutdown preserves on-disk build outputs/cache. Local and self-hosted
+        workflows keep their server; no process discovery or global kill is used.
+        """
+        if self._owned or self.udid is not None:
+            raise package.PackageError("Release the build server before creating the owned Simulator")
+        record = {"status": "checking", "started_utc": utc_now()}
+        self.evidence["build_server_release"] = record
+        if (os.environ.get("GITHUB_ACTIONS") != "true"
+                or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted"):
+            record.update(status="skipped", reason="not_github_hosted")
+            self._save()
+            return
+        try:
+            runner_temp = os.environ.get("RUNNER_TEMP")
+            if not runner_temp or not Path(runner_temp).is_absolute():
+                raise package.PackageError("Hosted build-server release requires absolute RUNNER_TEMP")
+            temporary = Path(runner_temp).resolve(strict=True)
+            checkout = Path(checkout).resolve(strict=True)
+            if any(path == temporary or not path.is_relative_to(temporary)
+                   for path in (checkout, self.artifacts)):
+                raise package.PackageError("Build-server checkout and artifacts must be inside RUNNER_TEMP")
+            # Make.BazelLocation derives this exact filename from versions.json;
+            # require the independently pinned package version and file bytes.
+            pin = package.load_json(package.ROOT / "Integration/BASE.json")["versions"]["bazel"]
+            if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+:[0-9a-f]{64}", pin):
+                raise package.PackageError("Invalid pinned Bazel version/hash")
+            if package.load_json(checkout / "versions.json").get("bazel") != pin:
+                raise package.PackageError("Checkout Bazel version differs from the package pin")
+            version, expected_hash = pin.split(":")
+            binary = package.bounded(checkout, f"build-input/bazel-{version}-darwin-arm64")
+            hasher = hashlib.sha256()
+            with binary.open("rb") as stream:
+                for block in iter(lambda: stream.read(1024 * 1024), b""):
+                    hasher.update(block)
+            if hasher.hexdigest() != expected_hash:
+                raise package.PackageError("Build-server Bazel binary differs from the pinned SHA-256")
+            # Query the same workspace/startup configuration as make_command.
+            # A busy server returns 9 instead of waiting or interrupting work.
+            info = self._run("bazel-identity", [binary, "--noblock_for_lock", "info",
+                "workspace", "output_base"], timeout=30, public_output=False, cwd=checkout).decode("utf-8")
+            fields = {}
+            for line in info.splitlines():
+                key, separator, value = line.partition(": ")
+                if separator and key in ("workspace", "output_base"):
+                    if key in fields or not Path(value).is_absolute():
+                        raise package.PackageError("Ambiguous Bazel server identity")
+                    fields[key] = Path(value).resolve(strict=True)
+            if set(fields) != {"workspace", "output_base"} or fields["workspace"] != checkout:
+                raise package.PackageError("Bazel server belongs to a different or unknown workspace")
+            # Cross-check the real outputs from the completed build, without a
+            # glob, stale archive fallback, or selecting another workspace.
+            expected_outputs = fields["output_base"] / "execroot/_main/bazel-out"
+            outputs = (checkout / "bazel-out").resolve(strict=True)
+            if outputs != expected_outputs or expected_outputs.resolve(strict=True) != expected_outputs:
+                raise package.PackageError("Bazel output base does not own this checkout's built outputs")
+            record.update(binary=binary.name, binary_sha256=expected_hash,
+                          workspace=str(checkout), output_base=str(fields["output_base"]))
+            self.health("before-build-server-release")
+            try:
+                self._run("bazel-shutdown", [binary, "--noblock_for_lock",
+                    "--output_base=" + str(fields["output_base"]), "shutdown"], timeout=60, cwd=checkout)
+            finally:
+                self.health("after-build-server-release")
+            record["status"] = "passed"
+        except (package.PackageError, OSError, ValueError, KeyError, TypeError) as error:
+            record.update(status="failed", error=str(error))
+            if isinstance(error, package.PackageError):
+                raise
+            raise package.PackageError("Hosted build-server release failed: " + str(error)) from error
+        finally:
+            record["finished_utc"] = utc_now()
+            self._save()
 
     def create(self):
         try:

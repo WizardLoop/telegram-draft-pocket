@@ -12,42 +12,72 @@ final class DraftPocketMediaLifecycleTests: XCTestCase {
     override func setUpWithError() throws {
         initializeAccountManagement()
         self.directory = FileManager.default.temporaryDirectory.appendingPathComponent("draft-pocket-tests-" + UUID().uuidString)
-        self.postbox = try self.open(self.directory)
+        self.postbox = try self.open(self.directory, phase: "initial fixture open")
     }
 
     override func tearDownWithError() throws {
-        self.close()
+        try self.close()
         if let directory = self.directory {
             try? FileManager.default.removeItem(at: directory)
         }
     }
 
-    private func open(_ directory: URL) throws -> Postbox {
+    private func opening(_ directory: URL) throws -> Signal<PostboxResult, NoError> {
         let encryption = ValueBoxEncryptionParameters(forceEncryptionIfNoSet: false, key: try XCTUnwrap(.init(data: Data(count: 32))), salt: try XCTUnwrap(.init(data: Data(count: 16))))
-        let result = try self.value(openPostbox(basePath: directory.path, seedConfiguration: telegramPostboxSeedConfiguration, encryptionParameters: encryption, timestampForAbsoluteTimeBasedOperations: 1000, isMainProcess: true, isTemporary: false, isReadOnly: false, useCopy: false, useCaches: true, removeDatabaseOnError: false)
+        return openPostbox(basePath: directory.path, seedConfiguration: telegramPostboxSeedConfiguration, encryptionParameters: encryption, timestampForAbsoluteTimeBasedOperations: 1000, isMainProcess: true, isTemporary: false, isReadOnly: false, useCopy: false, useCaches: true, removeDatabaseOnError: false)
             |> filter { result in
                 if case .upgrading = result { return false }
                 return true
-            })
+            }
+    }
+
+    private func open(_ directory: URL, phase: String, file: StaticString = #filePath, line: UInt = #line) throws -> Postbox {
+        let result = try self.value(self.opening(directory), description: phase, file: file, line: line)
         guard case let .postbox(postbox) = result else {
             throw NSError(domain: "DraftPocketTests", code: 1)
         }
         return postbox
     }
 
-    private func close() {
-        if let postbox = self.postbox {
-            _ = try? self.value(postbox.transaction { _ in })
-            _ = try? self.value(postbox.mediaBox.storageBox.all())
-            _ = try? self.value(postbox.mediaBox.cacheStorageBox.all())
-            postbox.mediaBox.dataQueue.sync {}
+    private func waitFor(_ expectation: XCTestExpectation, file: StaticString = #filePath, line: UInt = #line) throws {
+        let result = XCTWaiter.wait(for: [expectation], timeout: 15)
+        guard result == .completed else {
+            XCTFail("Timed out waiting for \(expectation.expectationDescription): \(result)", file: file, line: line)
+            throw NSError(domain: "DraftPocketTests.wait", code: 1)
         }
-        self.postbox = nil
-        Postbox.sharedQueue.sync {}
     }
 
-    private func value<T>(_ signal: Signal<T, NoError>, file: StaticString = #filePath, line: UInt = #line) throws -> T {
-        let completed = self.expectation(description: "Postbox transaction completes")
+    private func barrier(_ queue: Queue, description: String) throws {
+        let completed = self.expectation(description: description)
+        queue.async { completed.fulfill() }
+        try self.waitFor(completed)
+    }
+
+    private func close() throws {
+        weak var releasedPostbox: Postbox? = self.postbox
+        defer { self.postbox = nil }
+        // Keep all temporary strong references inside this scope. Standalone
+        // retention collectors may outlive their observer, so a queue barrier
+        // alone is not proof that the old Postbox has actually been released.
+        try autoreleasepool {
+            if let postbox = self.postbox {
+                _ = try self.value(postbox.transaction { _ in }, description: "close: Postbox transaction drain")
+                _ = try self.value(postbox.mediaBox.storageBox.all(), description: "close: storage drain")
+                _ = try self.value(postbox.mediaBox.cacheStorageBox.all(), description: "close: cache storage drain")
+                try self.barrier(postbox.mediaBox.dataQueue, description: "close: MediaBox data queue barrier")
+            }
+        }
+        self.postbox = nil
+        let released = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in releasedPostbox == nil }, object: nil)
+        released.expectationDescription = "close: old Postbox and background collectors released"
+        try self.waitFor(released)
+        // QueueLocalObject releases the implementation asynchronously. Bound this
+        // wait too: a failed open must not hang teardown until Bazel kills the target.
+        try self.barrier(Postbox.sharedQueue, description: "close: Postbox implementation release barrier")
+    }
+
+    private func value<T>(_ signal: Signal<T, NoError>, description: String = "Postbox transaction completes", file: StaticString = #filePath, line: UInt = #line) throws -> T {
+        let completed = self.expectation(description: description)
         let result = Atomic<T?>(value: nil)
         let disposable = (signal |> take(1)).start(next: { resultValue in
             _ = result.swap(resultValue)
@@ -55,7 +85,7 @@ final class DraftPocketMediaLifecycleTests: XCTestCase {
             completed.fulfill()
         })
         defer { disposable.dispose() }
-        self.wait(for: [completed], timeout: 15)
+        try self.waitFor(completed, file: file, line: line)
         return try XCTUnwrap(result.with { $0 }, file: file, line: line)
     }
 
@@ -138,8 +168,8 @@ final class DraftPocketMediaLifecycleTests: XCTestCase {
         let (snapshot, resource, bytes, external) = try self.localReferenceSnapshot()
         let saved = try self.success(self.perform(.putAside(snapshot: snapshot, clearedState: self.opaque(""))))
         try FileManager.default.removeItem(at: external)
-        self.close()
-        self.postbox = try self.open(self.directory)
+        try self.close()
+        self.postbox = try self.open(self.directory, phase: "cold reopen after external attachment deletion")
         let reopened = try self.view()
         XCTAssertEqual(reopened.items[0].id, saved.items[0].id)
         XCTAssertEqual(try self.value(self.postbox.mediaBox.removeCachedResourcesWithResult([resource.id], force: true)), [])
@@ -152,13 +182,53 @@ final class DraftPocketMediaLifecycleTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: external.path))
     }
 
+    func testColdReopenWhileRetentionLeaseIsHeldKeepsPostboxQueueResponsive() throws {
+        let (snapshot, resource, bytes, external) = try self.localReferenceSnapshot()
+        let saved = try self.success(self.perform(.putAside(snapshot: snapshot, clearedState: self.opaque(""))))
+        let retention = self.postbox.mediaBox.draftResourceRetention
+        try FileManager.default.removeItem(at: external)
+        try self.close()
+
+        // Model a collector that owns the filesystem lease and still needs a
+        // Postbox transaction. The old implementation queues open first, blocks
+        // that queue on this lease, then cannot service the barrier behind it.
+        let session = try retention.beginSession()
+        let opened = self.expectation(description: "cold reopen finishes after retention lease release")
+        let openResult = Atomic<PostboxResult?>(value: nil)
+        let disposable = (try self.opening(self.directory) |> take(1)).start(next: { result in
+            _ = openResult.swap(result)
+        }, completed: { opened.fulfill() })
+        defer {
+            session.finish()
+            disposable.dispose()
+        }
+        let queueResponsive = self.expectation(description: "Postbox queue runs while cold reopen waits for retention lease")
+        Postbox.sharedQueue.async { queueResponsive.fulfill() }
+        let queueResult = XCTWaiter.wait(for: [queueResponsive], timeout: 15)
+        XCTAssertNil(openResult.with { $0 }, "Reopen must not publish an account before retention recovery finishes")
+        // Always release from the test thread, including on regression failure,
+        // so the blocked queue can unwind and teardown remains bounded.
+        session.finish()
+        try self.waitFor(opened)
+        guard case let .postbox(reopened)? = openResult.swap(nil) else {
+            return XCTFail("Cold reopen did not produce a Postbox")
+        }
+        self.postbox = reopened
+        XCTAssertEqual(queueResult, .completed, "Startup recovery blocked Postbox.sharedQueue behind its own retention lock")
+        XCTAssertEqual(try self.view().items.first?.id, saved.items.first?.id)
+        XCTAssertEqual(try self.value(reopened.mediaBox.removeCachedResourcesWithResult([resource.id], force: true)), [])
+        let data = try self.value(reopened.mediaBox.resourceData(resource, attemptSynchronously: true))
+        XCTAssertTrue(data.complete)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: data.path)), bytes)
+    }
+
     func testPreparedSendSurvivesClearCrashAndRecoversWithoutOverwritingNewerText() throws {
         let (snapshot, resource, bytes, external) = try self.restoredReference()
         let operationId = try self.prepare(snapshot)
         try self.clearActiveOwnershipAndPersist("newer input")
         try FileManager.default.removeItem(at: external)
-        self.close()
-        self.postbox = try self.open(self.directory)
+        try self.close()
+        self.postbox = try self.open(self.directory, phase: "cold reopen after prepared-send interruption")
         XCTAssertTrue(try self.value(_internal_collectDraftPocketMedia(postbox: self.postbox)))
         let view = try self.view()
         XCTAssertEqual(view.pendingSends.map { $0.id }, [operationId])

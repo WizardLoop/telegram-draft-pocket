@@ -702,6 +702,7 @@ def capture(checkout, configuration, cache, artifacts, test_filter):
     secondary_errors = []
     events = []
     try:
+        session.release_build_server(checkout)
         udid = session.create()
         identity.update({"udid": udid, "runtime": session.runtime})
         identity_path.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")

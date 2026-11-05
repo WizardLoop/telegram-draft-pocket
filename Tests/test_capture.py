@@ -22,13 +22,13 @@ SPEC.loader.exec_module(capture)
 
 class RecorderReadinessTests(unittest.TestCase):
     def test_startup_failure_cleans_owned_device_and_never_starts_recorder_or_xctest(self):
-        for failed_method, disk_failure in (("boot", False), ("probe_framebuffer", False), ("boot", True)):
+        for failed_method, disk_failure in (("release_build_server", False), ("boot", False), ("probe_framebuffer", False), ("boot", True)):
             with self.subTest(phase=failed_method, disk_failure=disk_failure), tempfile.TemporaryDirectory() as temporary:
                 artifacts = Path(temporary)
                 session = mock.Mock(udid="CA1C775E-9033-4666-9B09-1E195CA035B5", runtime="ios-runtime")
                 session.create.return_value = session.udid
                 disk = {"failed": False}
-                def fail_startup():
+                def fail_startup(*args):
                     disk["failed"] = disk_failure
                     raise capture.package.PackageError("startup failed")
                 getattr(session, failed_method).side_effect = fail_startup
@@ -56,6 +56,10 @@ class RecorderReadinessTests(unittest.TestCase):
                                     "DraftPocketDemoUITests/testCaptureProductionStory")
                 self.assertEqual(spawn.call_count, 1)  # Only the preparation build ran.
                 session.cleanup.assert_called_once()
+                self.assertEqual(session.method_calls[0], mock.call.release_build_server(artifacts))
+                if failed_method == "release_build_server":
+                    session.create.assert_not_called()
+                    session.boot.assert_not_called()
                 session.health.assert_called_once_with("capture-failure-before-recorder-stop")
                 self.assertIn("cleanup also failed", str(failure.exception))
                 if disk_failure:

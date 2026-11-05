@@ -73,7 +73,7 @@
         "action": "copy",
         "source": "submodules/TelegramCore/Tests/DraftPocketMediaLifecycleTests.swift",
         "target": "submodules/TelegramCore/Tests/DraftPocketMediaLifecycleTests.swift",
-        "sha256": "19fa15d13f38cbdb152b6b73c492f8202b67c94d8f4043ef3a236aaa84a2449d"
+        "sha256": "48b788bc018559adc50113c6942f292d703df96888f903150397389f1b1a0aea"
       },
       {
         "action": "copy",
@@ -132,7 +132,7 @@
     ],
     "patch": {
       "source": "Integration/telegram-ios.patch",
-      "sha256": "9813219b4ba305f52263f6c2c1be0fecd031fe62a16f0caee87614006f13a9d0",
+      "sha256": "479488d6d58c26ae40023d4346ebecdc73fa8f63da3e7a247eaf1242506b08b6",
       "files": [
         {
           "action": "modify",
@@ -190,6 +190,12 @@
         },
         {
           "action": "modify",
+          "target": "submodules/Postbox/Sources/Postbox.swift",
+          "before_sha256": "71ce7879969134652ceb1ea82f9fe56670977033d148b50a5fd76bfec716e231",
+          "after_sha256": "3497c7ade9d2ef57b73f7d41b6743a734b50446408a40065706828c12048521a"
+        },
+        {
+          "action": "modify",
           "target": "submodules/Postbox/Sources/TimeBasedCleanup.swift",
           "before_sha256": "578b98a3015e0948860bd956af71ed007668e6b787bd2d0f827821d48c1753c1",
           "after_sha256": "df84bac3721d4d5e568ac4d43b3b286f7e3fd81b532482ca806e035cf38b76ea"
@@ -211,6 +217,12 @@
           "target": "submodules/Postbox/Sources/Utils/Decoder/AdaptedPostboxUnkeyedDecodingContainer.swift",
           "before_sha256": "d3c9ec69da401aa3efae74004989be21bdcfcab0434f5135188de3a5d8eb6830",
           "after_sha256": "fe131b988768a0af974fb4fb3e50c4f7e18d2e804b65602d5b9ec8ffac4248ea"
+        },
+        {
+          "action": "modify",
+          "target": "submodules/Postbox/Tests/PostboxFixture.swift",
+          "before_sha256": "6e1b8a880e45997b772ff8495d3e5d0c56fe4fdc29279fbed1b80538d9acc3e5",
+          "after_sha256": "5560a84d343950610b5ccf3ad283ca29e840db5627464467eb2a7a1da27c7514"
         },
         {
           "action": "modify",

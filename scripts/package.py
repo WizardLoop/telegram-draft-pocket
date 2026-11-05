@@ -637,6 +637,7 @@ def run_native_tests(checkout, configuration, cache, targets, simulator_config=N
         session = None
         try:
             session = SimulatorSession(artifacts, label="native", **simulator_config)
+            session.release_build_server(checkout)
             session.create()
             report["simulator"].update(udid=session.udid, runtime=session.runtime)
             save()

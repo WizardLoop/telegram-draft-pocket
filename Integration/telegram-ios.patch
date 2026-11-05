@@ -574,6 +574,64 @@ index e28a2d0f1b2467dc7dc1758bae0f396a8d24c9ae..007549170cb41177c4cb12636eb6dacc
                          if let context = self.statusContexts[id] {
                              context.status = .Remote(progress: 0.0)
                              for f in context.subscribers.copyItems() {
+diff --git a/submodules/Postbox/Sources/Postbox.swift b/submodules/Postbox/Sources/Postbox.swift
+index 5fdf8a8ded8f23c92592814e9072b6d4f8a0c5c1..97e8b04ccd778decb22c7f4fa6cabb3e813c8fb2 100644
+--- a/submodules/Postbox/Sources/Postbox.swift
++++ b/submodules/Postbox/Sources/Postbox.swift
+@@ -1461,6 +1461,23 @@ func debugRestoreState(basePath: String, name: String) {
+ }
+ 
+ public func openPostbox(basePath: String, seedConfiguration: SeedConfiguration, encryptionParameters: ValueBoxEncryptionParameters, timestampForAbsoluteTimeBasedOperations: Int32, isMainProcess: Bool, isTemporary: Bool, isReadOnly: Bool, useCopy: Bool, useCaches: Bool, removeDatabaseOnError: Bool) -> Signal<PostboxResult, NoError> {
++    // Retention recovery can wait for a session whose owner needs a Postbox
++    // transaction to finish. Never acquire that lock on Postbox.sharedQueue.
++    // Construct the complete MediaBox here and inject it below: preflight alone
++    // would leave a second, racy lock acquisition inside the Postbox initializer.
++    let mediaBox = Signal<MediaBox, NoError> { subscriber in
++        Queue.concurrentBackgroundQueue().async {
++            subscriber.putNext(MediaBox(basePath: basePath + "/media", isMainProcess: isMainProcess))
++            subscriber.putCompletion()
++        }
++        return EmptyDisposable
++    }
++    return mediaBox |> mapToSignal { mediaBox in
++        return openPostboxWithMediaBox(basePath: basePath, seedConfiguration: seedConfiguration, encryptionParameters: encryptionParameters, timestampForAbsoluteTimeBasedOperations: timestampForAbsoluteTimeBasedOperations, isTemporary: isTemporary, isReadOnly: isReadOnly, useCopy: useCopy, useCaches: useCaches, removeDatabaseOnError: removeDatabaseOnError, mediaBox: mediaBox)
++    }
++}
++
++private func openPostboxWithMediaBox(basePath: String, seedConfiguration: SeedConfiguration, encryptionParameters: ValueBoxEncryptionParameters, timestampForAbsoluteTimeBasedOperations: Int32, isTemporary: Bool, isReadOnly: Bool, useCopy: Bool, useCaches: Bool, removeDatabaseOnError: Bool, mediaBox: MediaBox) -> Signal<PostboxResult, NoError> {
+     let queue = Postbox.sharedQueue
+     return Signal { subscriber in
+         queue.async {
+@@ -1588,7 +1605,7 @@ public func openPostbox(basePath: String, seedConfiguration: SeedConfiguration,
+                 let endTime = CFAbsoluteTimeGetCurrent()
+                 postboxLog("Postbox load took \((endTime - startTime) * 1000.0) ms")
+                 
+-                subscriber.putNext(.postbox(Postbox(queue: queue, basePath: basePath, seedConfiguration: seedConfiguration, valueBox: valueBox, timestampForAbsoluteTimeBasedOperations: timestampForAbsoluteTimeBasedOperations, isMainProcess: isMainProcess, isTemporary: isTemporary, tempDir: tempDir, useCaches: useCaches)))
++                subscriber.putNext(.postbox(Postbox(queue: queue, basePath: basePath, mediaBox: mediaBox, seedConfiguration: seedConfiguration, valueBox: valueBox, timestampForAbsoluteTimeBasedOperations: timestampForAbsoluteTimeBasedOperations, isTemporary: isTemporary, tempDir: tempDir, useCaches: useCaches)))
+ 
+                 postboxLog("openPostbox, putCompletion")
+ 
+@@ -4691,10 +4708,10 @@ public class Postbox {
+     init(
+         queue: Queue,
+         basePath: String,
++        mediaBox: MediaBox,
+         seedConfiguration: SeedConfiguration,
+         valueBox: SqliteValueBox,
+         timestampForAbsoluteTimeBasedOperations: Int32,
+-        isMainProcess: Bool,
+         isTemporary: Bool,
+         tempDir: TempBoxDirectory?,
+         useCaches: Bool
+@@ -4704,7 +4721,7 @@ public class Postbox {
+         self.seedConfiguration = seedConfiguration
+ 
+         postboxLog("MediaBox path: \(basePath + "/media")")
+-        self.mediaBox = MediaBox(basePath: basePath + "/media", isMainProcess: isMainProcess)
++        self.mediaBox = mediaBox
+ 
+         let isInTransaction = self.isInTransaction
+         
 diff --git a/submodules/Postbox/Sources/TimeBasedCleanup.swift b/submodules/Postbox/Sources/TimeBasedCleanup.swift
 index b874fd269eec34983daf34a2be32cbf62ab1c7c3..af68b3ee66bfbf9f6b043ab413f30b1e85555f98 100644
 --- a/submodules/Postbox/Sources/TimeBasedCleanup.swift
@@ -939,6 +997,22 @@ index ebc3a779d7ace6b69e188fd549ec95ff91c2e753..71f12ca139cd1132db28da1cafd09896
                  throw DecodingError.typeMismatch(T.self, DecodingError.Context(codingPath: self.codingPath, debugDescription: ""))
              }
          }
+diff --git a/submodules/Postbox/Tests/PostboxFixture.swift b/submodules/Postbox/Tests/PostboxFixture.swift
+index c77fd5d122bbc3b5e49acbe0e525b3a1dc7119f5..e1ff97bab30e49eb547bdab696d1e241ed7508d3 100644
+--- a/submodules/Postbox/Tests/PostboxFixture.swift
++++ b/submodules/Postbox/Tests/PostboxFixture.swift
+@@ -37,10 +37,10 @@ final class PostboxFixture {
+         self.postbox = Postbox(
+             queue: queue,
+             basePath: basePath,
++            mediaBox: MediaBox(basePath: basePath + "/media", isMainProcess: true),
+             seedConfiguration: MessageHistoryTableFixture.makeSeedConfiguration(),
+             valueBox: valueBox!,
+             timestampForAbsoluteTimeBasedOperations: Int32(Date().timeIntervalSince1970),
+-            isMainProcess: true,
+             isTemporary: true,
+             tempDir: nil,
+             useCaches: true
 diff --git a/submodules/TelegramCore/BUILD b/submodules/TelegramCore/BUILD
 index d4ed7767a2606d67bebfb62f4f0699c423a22528..edbb0bfb7260b785853665c4439eb295a1f19bce 100644
 --- a/submodules/TelegramCore/BUILD

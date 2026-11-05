@@ -45,8 +45,8 @@ class NativeTargetAggregationTests(unittest.TestCase):
         targets = ["//Tests:One", "//Tests:Two", {"target": "//Tests:Three", "filter": "SelectedTests"},
                    "//Tests:Four", "//Tests:Five"]
         visited = []
-        for method in ("create", "boot", "reset_after_failure", "cleanup"):
-            getattr(self.session, method).side_effect = lambda name=method: visited.append(name)
+        for method in ("release_build_server", "create", "boot", "reset_after_failure", "cleanup"):
+            getattr(self.session, method).side_effect = lambda *args, name=method: visited.append(name)
 
         def execute(command, **kwargs):
             target = command[command.index("--target") + 1]
@@ -61,7 +61,7 @@ class NativeTargetAggregationTests(unittest.TestCase):
             with self.assertRaises(ci.package.PackageError) as caught:
                 self.invoke(targets)
         self.assertEqual(visited, [("build", "//Tests:" + name) for name in ("One", "Two", "Three", "Four", "Five")] +
-                         ["create", "boot", ("test", "//Tests:One"), ("test", "//Tests:Three"),
+                         ["release_build_server", "create", "boot", ("test", "//Tests:One"), ("test", "//Tests:Three"),
                           ("test", "//Tests:Four"), "reset_after_failure", ("test", "//Tests:Five"), "cleanup"])
         self.assertIn("2 of 5", str(caught.exception))
         self.assertIn("//Tests:Two [build]: compiler exited 1", str(caught.exception))
@@ -93,6 +93,16 @@ class NativeTargetAggregationTests(unittest.TestCase):
         self.session.cleanup.assert_called_once()
         self.assertEqual(self.report()["targets"][0]["test"], "not_run")
         self.assertIn("boot readiness timed out", self.report()["lifecycle_errors"][0])
+
+    def test_server_release_failure_prevents_device_and_tests_but_preserves_failure(self):
+        self.session.release_build_server.side_effect = ci.package.PackageError("Bazel server busy")
+        with mock.patch.object(ci.package, "run") as run, self.assertRaisesRegex(ci.package.PackageError, "Bazel server busy"):
+            self.invoke(["//Tests:One"])
+        self.assertEqual(run.call_count, 1)
+        self.session.create.assert_not_called()
+        self.session.boot.assert_not_called()
+        self.session.cleanup.assert_called_once()
+        self.assertEqual(self.report()["targets"][0]["test"], "not_run")
 
     def test_test_failure_and_cleanup_failure_are_both_retained(self):
         self.session.cleanup.side_effect = ci.package.PackageError("owned shutdown/delete failed")
@@ -163,6 +173,7 @@ class ConfigurePortableCLI(unittest.TestCase):
             "native_test_simulator": {"device_type": "iPhone 17", "os_version": "27.0"}}
         entry.run = lambda *args, **kwargs: b""
         import simulator
+        simulator.SimulatorSession.release_build_server = lambda *args: None
         simulator.subprocess.run = lambda command, **kwargs: subprocess.CompletedProcess(
             command, 1, stdout=b"synthetic runtime discovery error\n")
 

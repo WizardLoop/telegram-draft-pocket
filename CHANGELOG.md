@@ -22,4 +22,6 @@
 - Keep cards intact when the active composer becomes unavailable; refuse Pocket operations in an unsent new-topic placeholder.
 - Prebuild native targets, address an explicitly owned Simulator, bound and record startup/cleanup phases, and attempt capture before the independent native suite.
 - Allow up to 120 minutes for manually requested public-runner validation, retaining bounded Simulator startup timeouts.
+- Initialize media-retention recovery before entering the Postbox queue to remove a cold-reopen lock cycle; add a real-lease contention regression and bounded test cleanup.
+- Release only the verified hosted task's Bazel server before Simulator boot, retaining build outputs and recording resource measurements; leave local and self-hosted servers untouched.
 - Keep native runtime and capture results separate from source/packaging validation; refuse unsupported transfers before mutation.
