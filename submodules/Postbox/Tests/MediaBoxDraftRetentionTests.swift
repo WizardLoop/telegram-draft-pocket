@@ -7,6 +7,94 @@ import XCTest
 /// Real bytes, real MediaBox eviction APIs and an independently reopened retention store.
 /// These tests must run in the native simulator target; they are not codec-only substitutes.
 final class MediaBoxDraftRetentionTests: XCTestCase {
+    private struct ValidationChild: Codable, Equatable {
+        let number: Int64
+        let labels: [String]
+    }
+
+    private struct ValidationRecord: Codable, Equatable {
+        let version: Int32
+        let child: ValidationChild
+        let children: [ValidationChild]
+        let bytes: [Data]
+        let numbers: [Int32]
+    }
+
+    func testOptInPostboxValidationAcceptsRealNestedCodecOutput() throws {
+        let child = ValidationChild(number: 42, labels: ["עברית", "nested"])
+        let value = ValidationRecord(version: 1, child: child, children: [child], bytes: [Data([0xff, 0, 1]), Data()], numbers: [1, 2])
+        let encoded = try AdaptedPostboxEncoder().encode(value)
+        XCTAssertTrue(PostboxDecoder.isWellFormedData(encoded))
+        XCTAssertEqual(try AdaptedPostboxDecoder(validateData: true).decode(ValidationRecord.self, from: encoded), value)
+        XCTAssertEqual(try AdaptedPostboxDecoder().decode(ValidationRecord.self, from: encoded), value)
+    }
+
+    func testOptInPostboxValidationAcceptsEveryExistingWireKind() {
+        let encoder = PostboxEncoder()
+        encoder.encodeInt32(1, forKey: "int32")
+        encoder.encodeInt64(2, forKey: "int64")
+        encoder.encodeBool(true, forKey: "bool")
+        encoder.encodeDouble(1.5, forKey: "double")
+        encoder.encodeString("text", forKey: "string")
+        encoder.encodeObjectWithEncoder(Int32(3), encoder: { $0.encodeInt32(3, forKey: "value") }, forKey: "object")
+        encoder.encodeInt32Array([1, 2], forKey: "int32Array")
+        encoder.encodeInt64Array([3, 4], forKey: "int64Array")
+        encoder.encodeObjectArrayWithEncoder([Int32(5)], forKey: "objectArray", encoder: { $1.encodeInt32($0, forKey: "value") })
+        encoder.encodeObjectDictionary([MediaId(namespace: 1, id: 2): MediaId(namespace: 3, id: 4)], forKey: "dictionary")
+        encoder.encodeData(Data([0xff]), forKey: "bytes")
+        encoder.encodeNil(forKey: "nil")
+        encoder.encodeStringArray(["one", "two"], forKey: "strings")
+        encoder.encodeDataArray([Data([0xff])], forKey: "byteArrays")
+        XCTAssertTrue(PostboxDecoder.isWellFormedData(encoder.makeData()))
+    }
+
+    func testOptInPostboxValidationRejectsMalformedFramingBeforeLegacyDecoder() throws {
+        let invalid: [Data] = [
+            Data([0xff, 0, 0x7f]), // actual native regression: negative key length
+            Data([3, 0x61]), // truncated key
+            Data([1, 0x61, 0xff]), // unknown value type
+            Data([1, 0x61, 0, 1]), // truncated Int32
+            Data([1, 0x61, 10, 0xff, 0xff, 0xff, 0xff]), // negative byte length
+            Data([1, 0x61, 8, 0xff, 0xff, 0xff, 0xff]), // negative object count
+            Data([1, 0x61, 5, 0, 0, 0, 0, 3, 0, 0, 0, 0xff, 0, 0]), // malformed nested object
+            Data([1, 0x61, 8, 1, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0x7f]) // oversized element
+        ]
+        for data in invalid {
+            XCTAssertFalse(PostboxDecoder.isWellFormedData(data))
+            XCTAssertThrowsError(try AdaptedPostboxDecoder(validateData: true).decode(ValidationRecord.self, from: data))
+        }
+        let encoded = try AdaptedPostboxEncoder().encode(ValidationChild(number: 7, labels: ["tail"]))
+        for count in 0 ..< encoded.count {
+            XCTAssertThrowsError(try AdaptedPostboxDecoder(validateData: true).decode(ValidationChild.self, from: Data(encoded.prefix(count))))
+        }
+    }
+
+    func testOptInPostboxValidationRejectsWrongContainerAndElementTypes() throws {
+        struct Children: Decodable { let children: [ValidationChild] }
+        struct Child: Decodable { let child: ValidationChild }
+        let objectInsteadOfArray = PostboxEncoder()
+        objectInsteadOfArray.encodeObjectWithEncoder(Int32(0), encoder: { _ in }, forKey: "children")
+        let primitiveInsteadOfObject = PostboxEncoder()
+        primitiveInsteadOfObject.encodeInt32Array([42], forKey: "children")
+        for data in [objectInsteadOfArray.makeData(), primitiveInsteadOfObject.makeData()] {
+            XCTAssertTrue(PostboxDecoder.isWellFormedData(data), "wire framing is valid; its schema is not")
+            XCTAssertThrowsError(try AdaptedPostboxDecoder(validateData: true).decode(Children.self, from: data))
+        }
+        let arrayInsteadOfObject = PostboxEncoder()
+        arrayInsteadOfObject.encodeInt32Array([42], forKey: "child")
+        XCTAssertThrowsError(try AdaptedPostboxDecoder(validateData: true).decode(Child.self, from: arrayInsteadOfObject.makeData()))
+    }
+
+    func testOptInPostboxValidationBoundsNesting() {
+        var data = Data()
+        for _ in 0 ... PostboxDataValidation.maximumDepth {
+            let encoder = PostboxEncoder()
+            encoder.encodeInnerObjectDataWithHeader(typeHash: 0, data: data, valueType: .Object, forKey: "nested")
+            data = encoder.makeData()
+        }
+        XCTAssertFalse(PostboxDecoder.isWellFormedData(data))
+    }
+
     private var directory: URL!
     private let id = MediaResourceId("local-file-9101")
     private let bytes = Data((0 ..< 100_003).map { UInt8($0 % 251) })

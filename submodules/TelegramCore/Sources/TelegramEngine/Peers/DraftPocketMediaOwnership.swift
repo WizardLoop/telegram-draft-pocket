@@ -61,7 +61,7 @@ struct DraftPocketMediaOwnership: Codable {
 
     static func read(transaction: Transaction) throws -> Self {
         guard let entry = transaction.getPreferencesEntry(key: PreferencesKeys.draftPocketMediaOwnership) else { return Self() }
-        let value = try AdaptedPostboxDecoder().decode(Self.self, from: entry.data)
+        let value = try AdaptedPostboxDecoder(validateData: true).decode(Self.self, from: entry.data)
         guard value.version == 1, value.revision >= 0,
               value.entries.allSatisfy({ $0.owner.isValid && !$0.resources.isEmpty }),
               Set(value.entries.map { $0.owner }).count == value.entries.count else { throw DraftPocketError.corruptStorage }
@@ -89,7 +89,12 @@ struct DraftPocketMediaOwnership: Codable {
         guard self.revision < Int64.max else { throw DraftPocketError.corruptStorage }
         var updated = self
         updated.revision += 1
-        return try AdaptedPostboxEncoder().encode(updated)
+        let data = try AdaptedPostboxEncoder().encode(updated)
+        // A prepared send may authorize clearing the composer only after its recovery
+        // record can be read by the same bounded decoder used after a restart. This
+        // also validates Snapshot's separately encoded content/interface-state bytes.
+        _ = try AdaptedPostboxDecoder(validateData: true).decode(Self.self, from: data)
+        return data
     }
 
     static func commitEncoded(_ data: Data, transaction: Transaction) {

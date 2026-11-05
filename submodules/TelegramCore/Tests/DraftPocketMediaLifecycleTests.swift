@@ -168,6 +168,35 @@ final class DraftPocketMediaLifecycleTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: data.path)), bytes)
     }
 
+    func testUnreadablePreparedSnapshotCannotCommitOrReplaceExistingRecovery() throws {
+        let (snapshot, resource, bytes, _) = try self.restoredReference()
+        let existingOperation = try self.prepare(snapshot)
+        let before = try self.view()
+        let ownershipBefore = try self.transaction { transaction in
+            try XCTUnwrap(transaction.getPreferencesEntry(key: PreferencesKeys.draftPocketMediaOwnership)?.data)
+        }
+        var futureContent = snapshot.content
+        futureContent.schemaVersion = 2
+        let unsupported = try DraftPocketSnapshot(content: futureContent, selection: snapshot.selection, state: snapshot.interfaceState())
+        let result = try self.value(_internal_prepareDraftPocketSend(postbox: self.postbox, peerId: self.peerId, threadId: nil, snapshot: unsupported))
+        guard case let .failure(error) = result else {
+            return XCTFail("An unreadable recovery must not authorize composer clearing")
+        }
+        XCTAssertEqual(error, .encodingFailed)
+        let after = try self.view()
+        XCTAssertNil(after.error)
+        XCTAssertEqual(after.activeStateToken, before.activeStateToken)
+        XCTAssertEqual(after.revision, before.revision)
+        XCTAssertEqual(after.pendingSends.map { $0.id }, [existingOperation])
+        XCTAssertEqual(after.pendingSends.first?.snapshot.content, snapshot.content)
+        try self.transaction { transaction in
+            XCTAssertEqual(transaction.getPreferencesEntry(key: PreferencesKeys.draftPocketMediaOwnership)?.data, ownershipBefore)
+        }
+        XCTAssertEqual(try self.value(self.postbox.mediaBox.removeCachedResourcesWithResult([resource.id], force: true)), [])
+        let data = try self.value(self.postbox.mediaBox.resourceData(resource, attemptSynchronously: true))
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: data.path)), bytes)
+    }
+
     func testSharedMediaSwapAtCapacityDeleteUndoAndLastOwnerRelease() throws {
         let (snapshot, resource, bytes, _) = try self.localReferenceSnapshot()
         for _ in 0 ..< draftPocketItemLimit {
@@ -252,6 +281,46 @@ final class DraftPocketMediaLifecycleTests: XCTestCase {
         }
         let untracked = try self.value(_internal_draftPocketSendRequiresRetention(postbox: self.postbox, peerId: self.peerId, threadId: nil, resourceIds: ["local-file-never-retained"]))
         XCTAssertFalse(try untracked.get())
+    }
+
+    func testMalformedOwnershipKeepsPinsAndRejectsPocketWhileOrdinaryAutosaveContinues() throws {
+        let (_, resource, bytes, _) = try self.restoredReference()
+        func wrongEntries(_ encode: (PostboxEncoder) -> Void) -> Data {
+            let encoder = PostboxEncoder()
+            encoder.encodeInt32(1, forKey: "version")
+            encoder.encodeInt64(0, forKey: "revision")
+            encode(encoder)
+            encoder.encodeInt32Array([], forKey: "pendingSends")
+            return encoder.makeData()
+        }
+        let wrongRecovery = PostboxEncoder()
+        wrongRecovery.encodeInt32(1, forKey: "version")
+        wrongRecovery.encodeInt64(0, forKey: "revision")
+        wrongRecovery.encodeInt32Array([], forKey: "entries")
+        wrongRecovery.encodeInt32Array([42], forKey: "pendingSends")
+        let corruptRecords = [
+            Data([0xff, 0, 0x7f]), Data([3, 0x61]),
+            Data([1, 0x61, 10, 0xff, 0xff, 0xff, 0xff]),
+            wrongEntries { $0.encodeInt32Array([42], forKey: "entries") },
+            wrongEntries { $0.encodeObjectWithEncoder(Int32(0), encoder: { _ in }, forKey: "entries") },
+            wrongRecovery.makeData()
+        ]
+        for (index, corrupt) in corruptRecords.enumerated() {
+            let state = self.opaque("ordinary draft \(index)")
+            let expected = try draftPocketActiveStateToken(state)
+            try self.transaction { transaction in
+                transaction.setPreferencesEntry(key: PreferencesKeys.draftPocketMediaOwnership, value: PreferencesEntry(data: corrupt))
+                XCTAssertThrowsError(try DraftPocketMediaOwnership.read(transaction: transaction))
+                XCTAssertFalse(_internal_setOpaqueChatInterfaceState(transaction: transaction, peerId: self.peerId, threadId: nil, state: state, retainedDraftResourceIds: []))
+                XCTAssertEqual(transaction.getPeerChatInterfaceState(self.peerId)?.data, expected)
+                XCTAssertEqual(transaction.getPreferencesEntry(key: PreferencesKeys.draftPocketMediaOwnership)?.data, corrupt)
+            }
+            XCTAssertEqual(try self.view().error, .corruptStorage)
+            XCTAssertFalse(try self.value(_internal_collectDraftPocketMedia(postbox: self.postbox)))
+            XCTAssertEqual(try self.value(self.postbox.mediaBox.removeCachedResourcesWithResult([resource.id], force: true)), [])
+            let data = try self.value(self.postbox.mediaBox.resourceData(resource, attemptSynchronously: true))
+            XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: data.path)), bytes)
+        }
     }
 
     func testRegularComposerAutosaveReleasesActiveOwnerButKeepsPendingBytesUntilDeletion() throws {

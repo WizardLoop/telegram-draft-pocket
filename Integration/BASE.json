@@ -10,6 +10,10 @@
     "bazel": "9.2.0:dd466352a3e4d3581b8898740ee1ff208866ccbe25f8d367c5dcb950219587e6",
     "macos": "27"
   },
+  "native_test_simulator": {
+    "device_type": "iPhone 17",
+    "os_version": "27.0"
+  },
   "native_test_targets": [
     "//submodules/TelegramCore:DraftPocketTests",
     "//submodules/ChatInterfaceState:DraftPocketComposerTests",

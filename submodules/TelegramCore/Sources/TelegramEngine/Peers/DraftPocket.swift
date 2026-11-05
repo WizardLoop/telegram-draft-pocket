@@ -13,12 +13,24 @@ public func draftPocketActiveStateToken(_ state: OpaqueChatInterfaceState) throw
 /// references in both a pocket card and the active local draft after restoration.
 public struct DraftPocketEmojiFiles: Codable {
     private let files: [Data]
+    private enum CodingKeys: String, CodingKey { case files }
 
     public init(content: ChatInputContent) {
         self.files = content.draftPocketCustomEmojiFiles().sorted(by: { $0.key < $1.key }).map {
             let encoder = PostboxEncoder()
             $0.value.encode(encoder)
             return encoder.makeData()
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.files = try container.decode([Data].self, forKey: .files)
+        for data in self.files {
+            guard PostboxDecoder.isWellFormedData(data),
+                  PostboxDecoder(buffer: MemoryBuffer(data: data)).decodeDataForKey("i")?.count == 12 else {
+                throw DraftPocketError.corruptStorage
+            }
         }
     }
 
@@ -107,7 +119,7 @@ public struct DraftPocketSnapshot: Codable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let contentData = try container.decode(Data.self, forKey: .content)
-        self.content = try AdaptedPostboxDecoder().decode(ChatInputContent.self, from: contentData)
+        self.content = try AdaptedPostboxDecoder(validateData: true).decode(ChatInputContent.self, from: contentData)
         // ChatInputContent's general draft decoder intentionally drops unknown blocks.
         // A pocket transfer must fail closed instead of saving that shortened body.
         guard self.content.schemaVersion == 1, try AdaptedPostboxEncoder().encode(self.content) == contentData else {
@@ -116,7 +128,7 @@ public struct DraftPocketSnapshot: Codable {
         self.storedSelection = try container.decode(DraftPocketSelection.self, forKey: .selection)
         self.storedInterfaceState = try container.decode(Data.self, forKey: .interfaceState)
         self.emojiFiles = try container.decode(DraftPocketEmojiFiles.self, forKey: .emojiFiles)
-        _ = try AdaptedPostboxDecoder().decode(InternalChatInterfaceState.self, from: self.storedInterfaceState)
+        _ = try AdaptedPostboxDecoder(validateData: true).decode(InternalChatInterfaceState.self, from: self.storedInterfaceState)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -128,7 +140,7 @@ public struct DraftPocketSnapshot: Codable {
     }
 
     public func interfaceState() throws -> OpaqueChatInterfaceState {
-        let state = try AdaptedPostboxDecoder().decode(InternalChatInterfaceState.self, from: self.storedInterfaceState)
+        let state = try AdaptedPostboxDecoder(validateData: true).decode(InternalChatInterfaceState.self, from: self.storedInterfaceState)
         return OpaqueChatInterfaceState(opaqueData: state.opaqueData, historyScrollMessageIndex: state.historyScrollMessageIndex, mediaDraftState: state.mediaDraftState, synchronizeableInputState: state.synchronizeableInputState)
     }
 
@@ -221,7 +233,7 @@ func draftPocketRead(transaction: Transaction, peerId: PeerId, threadId: Int64?)
         return DraftPocketState()
     }
     // Never turn a failed decode or a future schema into an empty writable pocket.
-    let state = try AdaptedPostboxDecoder().decode(DraftPocketState.self, from: entry.data)
+    let state = try AdaptedPostboxDecoder(validateData: true).decode(DraftPocketState.self, from: entry.data)
     guard state.schemaVersion == 1,
           state.revision >= 0,
           state.items.count + state.deletedItems.count <= draftPocketItemLimit,
@@ -359,14 +371,14 @@ func _internal_updateDraftPocket(transaction: Transaction, peerId: PeerId, threa
         }
         pocketData = try encodePocket(state)
         // Verify the actual codec before a destructive transfer, including unknown block loss.
-        let decoded = try AdaptedPostboxDecoder().decode(DraftPocketState.self, from: pocketData)
+        let decoded = try AdaptedPostboxDecoder(validateData: true).decode(DraftPocketState.self, from: pocketData)
         guard decoded.items.count == state.items.count,
               zip(decoded.items, state.items).allSatisfy({ pair in pair.0.snapshot.content == pair.1.snapshot.content && pair.0.snapshot.selection == pair.1.snapshot.selection }) else {
             return .failure(.encodingFailed)
         }
         if let active = active {
             activeData = try AdaptedPostboxEncoder().encode(InternalChatInterfaceState(synchronizeableInputState: active.synchronizeableInputState, historyScrollMessageIndex: active.historyScrollMessageIndex, mediaDraftState: active.mediaDraftState, opaqueData: active.opaqueData))
-            _ = try AdaptedPostboxDecoder().decode(InternalChatInterfaceState.self, from: activeData!)
+            _ = try AdaptedPostboxDecoder(validateData: true).decode(InternalChatInterfaceState.self, from: activeData!)
         } else {
             activeData = nil
         }
@@ -382,7 +394,7 @@ func _internal_updateDraftPocket(transaction: Transaction, peerId: PeerId, threa
         } else {
             transaction.setPeerChatInterfaceState(peerId, state: stored)
         }
-        let previousSync = previousActive?.data.flatMap { try? AdaptedPostboxDecoder().decode(InternalChatInterfaceState.self, from: $0).synchronizeableInputState }
+        let previousSync = previousActive?.data.flatMap { try? AdaptedPostboxDecoder(validateData: true).decode(InternalChatInterfaceState.self, from: $0).synchronizeableInputState }
         if previousSync != active.synchronizeableInputState {
             addSynchronizeChatInputStateOperation(transaction: transaction, peerId: peerId, threadId: threadId)
         }

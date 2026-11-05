@@ -20,6 +20,82 @@ capture = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(capture)
 
 
+class RecorderReadinessTests(unittest.TestCase):
+    def test_startup_failure_cleans_owned_device_and_never_starts_recorder_or_xctest(self):
+        for failed_method, disk_failure in (("boot", False), ("probe_framebuffer", False), ("boot", True)):
+            with self.subTest(phase=failed_method, disk_failure=disk_failure), tempfile.TemporaryDirectory() as temporary:
+                artifacts = Path(temporary)
+                session = mock.Mock(udid="CA1C775E-9033-4666-9B09-1E195CA035B5", runtime="ios-runtime")
+                session.create.return_value = session.udid
+                disk = {"failed": False}
+                def fail_startup():
+                    disk["failed"] = disk_failure
+                    raise capture.package.PackageError("startup failed")
+                getattr(session, failed_method).side_effect = fail_startup
+                original_write = Path.write_text
+                def write(path, *args, **kwargs):
+                    if disk["failed"]:
+                        raise OSError("capture disk full")
+                    return original_write(path, *args, **kwargs)
+                session.cleanup.side_effect = capture.package.PackageError("cleanup also failed")
+                manifest = {"feature": {"patch": {"sha256": "feature"}}, "demo": {"patch": {"sha256": "demo"},
+                    "native_test_target": "//Tests/DraftPocketDemo:DraftPocketDemoUITests", "device_type": "iPhone 17", "os_version": "27.0"}}
+                config = {"api_id": "12345", "api_hash": "owner-secret", "team_id": "LOCALTEAM", "app_center_id": "0", "bundle_id": "org.example.fixture"}
+                build = mock.Mock(stdout=[], wait=lambda: 0)
+                with mock.patch.object(capture.package, "toolchain"), \
+                        mock.patch.object(capture.package, "validate_package", return_value=({}, manifest)), \
+                        mock.patch.object(capture.package.shutil, "which", return_value="tool"), \
+                        mock.patch.object(capture.package, "load_json", return_value=config), \
+                        mock.patch.object(capture.package, "make_command", return_value=["build"]), \
+                        mock.patch.object(capture, "built_binary_inventory", return_value={"files": []}), \
+                        mock.patch.object(capture, "SimulatorSession", return_value=session), \
+                        mock.patch.object(capture.subprocess, "Popen", return_value=build) as spawn, \
+                        mock.patch.object(Path, "write_text", new=write), \
+                        self.assertRaisesRegex(capture.package.PackageError, "startup failed") as failure:
+                    capture.capture(artifacts, artifacts / "config", artifacts / "cache", artifacts,
+                                    "DraftPocketDemoUITests/testCaptureProductionStory")
+                self.assertEqual(spawn.call_count, 1)  # Only the preparation build ran.
+                session.cleanup.assert_called_once()
+                session.health.assert_called_once_with("capture-failure-before-recorder-stop")
+                self.assertIn("cleanup also failed", str(failure.exception))
+                if disk_failure:
+                    self.assertIn("capture disk full", str(failure.exception))
+                    continue
+                identity = json.loads((artifacts / "capture-identity.json").read_text())
+                self.assertEqual(identity["cleanup_error"], "cleanup also failed")
+                self.assertNotIn("recording_ready_utc", identity)
+
+    def test_native_ready_without_newline_is_observed_and_preserved(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "recorder.log"
+            with path.open("wb") as log:
+                process = subprocess.Popen([sys.executable, "-c",
+                    "import sys,time;sys.stdout.write('Recording started');sys.stdout.flush();time.sleep(10)"],
+                    stdout=log, stderr=subprocess.STDOUT)
+                try:
+                    capture.wait_for_recorder(process, path, timeout=5)
+                    self.assertIsNone(process.poll())
+                    self.assertEqual(path.read_bytes(), b"Recording started")
+                finally:
+                    process.kill()
+                    process.wait(timeout=5)
+
+    def test_exited_recorder_cannot_pass_even_with_ready_text(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "recorder.log"
+            path.write_bytes(b"Recording started\nencoder failed\n")
+            with self.assertRaisesRegex(capture.package.PackageError, "exited 7"):
+                capture.wait_for_recorder(mock.Mock(poll=lambda: 7), path)
+            self.assertIn(b"encoder failed", path.read_bytes())
+
+    def test_silent_live_recorder_does_not_start_xctest(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "recorder.log"
+            path.write_bytes(b"")
+            with self.assertRaisesRegex(capture.package.PackageError, "XCTest was not started"):
+                capture.wait_for_recorder(mock.Mock(poll=lambda: None), path, timeout=0)
+
+
 class CaptureEvidenceTests(unittest.TestCase):
     def setUp(self):
         self.selection = "DraftPocketDemoUITests/testCaptureProductionStory"

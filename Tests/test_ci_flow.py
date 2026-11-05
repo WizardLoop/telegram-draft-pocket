@@ -6,6 +6,8 @@ import io
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -18,36 +20,167 @@ SPEC.loader.exec_module(ci)
 
 
 class NativeTargetAggregationTests(unittest.TestCase):
+    simulator_config = {"device_type": "iPhone 17", "os_version": "27.0"}
+    simulator_udid = "7C348C6A-4D11-40A5-84AA-FC69999559CB"
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.artifacts = Path(temporary.name) / "native-evidence"
+        self.session = mock.Mock(udid=self.simulator_udid, runtime="com.apple.CoreSimulator.SimRuntime.iOS-27-0")
+        self.factory = mock.Mock(return_value=self.session)
+        patch = mock.patch.dict(sys.modules, {"simulator": mock.Mock(SimulatorSession=self.factory)})
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def invoke(self, targets):
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            return ci.package.run_native_tests(Path("checkout"), Path("config"), Path("cache"), targets,
+                simulator_config=self.simulator_config, artifacts=self.artifacts)
+
+    def report(self):
+        return json.loads((self.artifacts / "native-target-results.json").read_text())
+
     def test_every_target_runs_and_all_failures_are_reported(self):
         targets = ["//Tests:One", "//Tests:Two", {"target": "//Tests:Three", "filter": "SelectedTests"},
                    "//Tests:Four", "//Tests:Five"]
         visited = []
+        for method in ("create", "boot", "reset_after_failure", "cleanup"):
+            getattr(self.session, method).side_effect = lambda name=method: visited.append(name)
 
         def execute(command, **kwargs):
             target = command[command.index("--target") + 1]
-            visited.append(target)
-            if target == "//Tests:Two":
+            building = "--buildOnly" in command
+            visited.append(("build" if building else "test", target))
+            if building and target == "//Tests:Two":
                 raise ci.package.PackageError("compiler exited 1")
-            if target == "//Tests:Four":
+            if not building and target == "//Tests:Four":
                 raise OSError("runner failed to start")
 
-        output, errors = io.StringIO(), io.StringIO()
-        with mock.patch.object(ci.package, "run", side_effect=execute) as run, redirect_stdout(output), redirect_stderr(errors):
+        with mock.patch.object(ci.package, "run", side_effect=execute) as run:
             with self.assertRaises(ci.package.PackageError) as caught:
-                ci.package.run_native_tests(Path("checkout"), Path("config"), Path("cache"), targets)
-        self.assertEqual(visited, ["//Tests:" + name for name in ("One", "Two", "Three", "Four", "Five")])
+                self.invoke(targets)
+        self.assertEqual(visited, [("build", "//Tests:" + name) for name in ("One", "Two", "Three", "Four", "Five")] +
+                         ["create", "boot", ("test", "//Tests:One"), ("test", "//Tests:Three"),
+                          ("test", "//Tests:Four"), "reset_after_failure", ("test", "//Tests:Five"), "cleanup"])
         self.assertIn("2 of 5", str(caught.exception))
-        self.assertIn("//Tests:Two: compiler exited 1", str(caught.exception))
-        self.assertIn("//Tests:Four: runner failed to start", str(caught.exception))
-        self.assertIn("Native test target PASSED: //Tests:Five", output.getvalue())
-        self.assertEqual(run.call_args_list[2].args[0][-2:], ["--testFilter", "SelectedTests"])
+        self.assertIn("//Tests:Two [build]: compiler exited 1", str(caught.exception))
+        self.assertIn("//Tests:Four [test]: runner failed to start", str(caught.exception))
+        test_commands = [call.args[0] for call in run.call_args_list if "--buildOnly" not in call.args[0]]
+        for command in test_commands:
+            self.assertEqual(command[command.index("--simulatorUDID") + 1], self.simulator_udid)
+        self.assertEqual(test_commands[1][-2:], ["--testFilter", "SelectedTests"])
+        report = self.report()
+        self.assertEqual([item["test"] for item in report["targets"]], ["passed", "not_run", "passed", "failed", "passed"])
+        self.assertEqual(report["simulator"]["udid"], self.simulator_udid)
+        self.assertEqual(report["lifecycle_errors"], [])
+        self.factory.assert_called_once_with(self.artifacts, label="native", **self.simulator_config)
+
+    def test_all_build_failures_create_no_simulator(self):
+        with mock.patch.object(ci.package, "run", side_effect=ci.package.PackageError("build failed")):
+            with self.assertRaisesRegex(ci.package.PackageError, "2 of 2"):
+                self.invoke(["//Tests:One", "//Tests:Two"])
+        self.factory.assert_not_called()
+        self.assertEqual([item["build"] for item in self.report()["targets"]], ["failed", "failed"])
+
+    def test_boot_failure_cleans_up_owned_device_and_runs_no_test(self):
+        self.session.boot.side_effect = ci.package.PackageError("boot readiness timed out")
+        with mock.patch.object(ci.package, "run") as run:
+            with self.assertRaisesRegex(ci.package.PackageError, "1 compiled targets did not run"):
+                self.invoke(["//Tests:One"])
+        self.assertEqual(run.call_count, 1)
+        self.assertIn("--buildOnly", run.call_args.args[0])
+        self.session.cleanup.assert_called_once()
+        self.assertEqual(self.report()["targets"][0]["test"], "not_run")
+        self.assertIn("boot readiness timed out", self.report()["lifecycle_errors"][0])
+
+    def test_test_failure_and_cleanup_failure_are_both_retained(self):
+        self.session.cleanup.side_effect = ci.package.PackageError("owned shutdown/delete failed")
+        with mock.patch.object(ci.package, "run", side_effect=[None, ci.package.PackageError("native assertion failed")]):
+            with self.assertRaises(ci.package.PackageError) as caught:
+                self.invoke(["//Tests:One"])
+        self.assertIn("native assertion failed", str(caught.exception))
+        self.assertIn("owned shutdown/delete failed", str(caught.exception))
+        self.session.reset_after_failure.assert_not_called()
+        self.session.cleanup.assert_called_once()
+        self.assertEqual(self.report()["targets"][0]["test"], "failed")
+
+    def test_failed_recovery_stops_following_tests_and_still_cleans_up(self):
+        self.session.reset_after_failure.side_effect = ci.package.PackageError("reboot failed")
+        with mock.patch.object(ci.package, "run", side_effect=[None, None, ci.package.PackageError("native crash")]) as run:
+            with self.assertRaises(ci.package.PackageError) as caught:
+                self.invoke(["//Tests:One", "//Tests:Two"])
+        self.assertEqual(run.call_count, 3)
+        self.assertIn("native crash", str(caught.exception))
+        self.assertIn("reboot failed", str(caught.exception))
+        self.assertEqual([item["test"] for item in self.report()["targets"]], ["failed", "not_run"])
+        self.session.cleanup.assert_called_once()
+
+    def test_success_still_requires_owned_device_cleanup(self):
+        with mock.patch.object(ci.package, "run"):
+            self.invoke(["//Tests:One", "//Tests:Two"])
+        self.session.create.assert_called_once()
+        self.session.boot.assert_called_once()
+        self.session.reset_after_failure.assert_not_called()
+        self.session.cleanup.assert_called_once()
+        self.assertEqual([item["test"] for item in self.report()["targets"]], ["passed", "passed"])
 
     def test_empty_or_invalid_inventory_starts_no_target(self):
         for targets in ([], ["//Tests:Valid", {"target": "//Tests:Bad", "filter": "unsafe argument"}]):
             with self.subTest(targets=targets), mock.patch.object(ci.package, "run") as run:
                 with self.assertRaises(ci.package.PackageError):
-                    ci.package.run_native_tests(Path("checkout"), Path("config"), Path("cache"), targets)
+                    self.invoke(targets)
                 run.assert_not_called()
+        self.factory.assert_not_called()
+
+    def test_missing_pinned_simulator_starts_no_build_or_device(self):
+        with mock.patch.object(ci.package, "run") as run:
+            with self.assertRaisesRegex(ci.package.PackageError, "native_test_simulator"):
+                ci.package.run_native_tests(Path("checkout"), Path("config"), Path("cache"), ["//Tests:One"],
+                                            artifacts=self.artifacts)
+        run.assert_not_called()
+        self.factory.assert_not_called()
+
+    def test_real_cli_catches_shared_helper_error_and_preserves_lifecycle_report(self):
+        # A fresh Python runs the actual __main__ guard and native CLI path. The
+        # real Simulator helper raises its own imported package.PackageError;
+        # only expensive build/toolchain work and subprocess I/O are stubbed.
+        script = r'''
+import runpy
+import subprocess
+import sys
+import unittest
+from pathlib import Path
+
+entry_path, artifacts = Path(sys.argv[1]), Path(sys.argv[2])
+sys.path.insert(0, str(entry_path.parent))
+class ConfigurePortableCLI(unittest.TestCase):
+    def runTest(self):
+        entry = sys.modules["__main__"]
+        entry.validate_package = lambda *args, **kwargs: ({}, {})
+        entry.toolchain = lambda *args, **kwargs: {
+            "native_test_targets": ["//Tests:One"],
+            "native_test_simulator": {"device_type": "iPhone 17", "os_version": "27.0"}}
+        entry.run = lambda *args, **kwargs: b""
+        import simulator
+        simulator.subprocess.run = lambda command, **kwargs: subprocess.CompletedProcess(
+            command, 1, stdout=b"synthetic runtime discovery error\n")
+
+unittest.defaultTestLoader.discover = lambda *args, **kwargs: unittest.TestSuite([ConfigurePortableCLI()])
+sys.argv = [str(entry_path), "test", "--native", "--checkout", str(artifacts / "checkout"),
+            "--configuration", str(artifacts / "config"), "--cache", str(artifacts / "cache"),
+            "--artifacts", str(artifacts)]
+runpy.run_path(str(entry_path), run_name="__main__")
+'''
+        result = subprocess.run([sys.executable, "-c", script, str(ROOT / "scripts/package.py"), str(self.artifacts)],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=20)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertIn("Simulator runtimes exited 1", result.stderr)
+        report = self.report()
+        self.assertEqual(report["targets"][0]["build"], "passed")
+        self.assertEqual(report["targets"][0]["test"], "not_run")
+        self.assertIn("Simulator runtimes exited 1", report["lifecycle_errors"][0])
 
 
 class SimulatorFlowTests(unittest.TestCase):
@@ -113,10 +246,10 @@ class SimulatorFlowTests(unittest.TestCase):
             self.assertNotIn(config["api_hash"], log.read_text())
         return code, json.loads((artifacts / "status.json").read_text()), artifacts, visited
 
-    def test_native_failure_still_attempts_capture_and_exit_stays_failed(self):
+    def test_native_failure_preserves_completed_capture_and_exit_stays_failed(self):
         code, status, artifacts, visited = self.attempt({"native-tests": 1})
         self.assertEqual(code, 1)
-        self.assertEqual(visited, ["portable-tests", "bootstrap", "check", "build", "native-tests", "capture"])
+        self.assertEqual(visited, ["portable-tests", "bootstrap", "check", "build", "capture", "native-tests"])
         self.assertEqual(status["stages"]["portable_tests"], "passed")
         self.assertEqual(status["stages"]["build"], "passed")
         self.assertEqual(status["stages"]["native_tests"], "failed")
@@ -136,7 +269,17 @@ class SimulatorFlowTests(unittest.TestCase):
             self.assertEqual(set(status["stage_times_utc"][stage]), {"running", "failed"})
             self.assertIn(stage + ":", (artifacts / "failure.txt").read_text())
             self.assertTrue((artifacts / (stage + "-failure.txt")).is_file())
-        self.assertEqual(visited[-1], "capture")
+        self.assertEqual(visited[-1], "native-tests")
+
+    def test_capture_failure_still_runs_native_tests(self):
+        code, status, artifacts, visited = self.attempt({"capture": 1})
+        self.assertEqual(code, 1)
+        self.assertEqual(visited, ["portable-tests", "bootstrap", "check", "build", "capture", "native-tests"])
+        self.assertEqual(status["stages"]["capture"], "failed")
+        self.assertEqual(status["stages"]["native_tests"], "passed")
+        self.assertEqual(set(status["failures"]), {"capture"})
+        self.assertTrue((artifacts / "capture.log").is_file())
+        self.assertTrue((artifacts / "native-tests.log").is_file())
 
     def test_failed_app_build_prevents_tests_and_capture(self):
         code, status, _, visited = self.attempt({"build": 1})
@@ -169,7 +312,7 @@ class SimulatorFlowTests(unittest.TestCase):
         self.assertTrue(all(value == "passed" for value in status["stages"].values()))
         self.assertNotIn("failures", status)
         self.assertFalse((artifacts / "failure.txt").exists())
-        self.assertEqual(visited, ["portable-tests", "bootstrap", "check", "build", "native-tests", "capture"])
+        self.assertEqual(visited, ["portable-tests", "bootstrap", "check", "build", "capture", "native-tests"])
 
     def test_missing_demo_is_preserved_alongside_native_failure(self):
         code, status, _, visited = self.attempt({"native-tests": 1}, with_demo=False)

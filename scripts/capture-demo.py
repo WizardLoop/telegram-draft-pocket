@@ -17,12 +17,12 @@ import statistics
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import uuid
 import zipfile
 
 import package
+from simulator import SimulatorSession
 
 
 SCREENSHOTS = {
@@ -635,6 +635,23 @@ def inspect_media(raw, artifacts):
                  "-fps_mode", "passthrough", "-frames:v", "5", artifacts / "motion-%02d.png"])
 
 
+def wait_for_recorder(recorder, log_path, timeout=30):
+    """Require the native ready message, including output without a newline."""
+    deadline = time.monotonic() + timeout
+    while True:
+        code = recorder.poll()
+        if code is not None:
+            raise package.PackageError(f"Simulator recorder exited {code} before readiness; see capture-recorder.log")
+        with log_path.open("rb") as log:
+            output = log.read(1024 * 1024)
+        if b"Recording started" in output:
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise package.PackageError("Simulator recording did not report ready; XCTest was not started")
+        time.sleep(min(0.1, remaining))
+
+
 def capture(checkout, configuration, cache, artifacts, test_filter):
     package.toolchain(package.ROOT, checkout, configuration, with_demo=True)
     _, manifest = package.validate_package(package.ROOT, with_demo=True)
@@ -667,17 +684,8 @@ def capture(checkout, configuration, cache, artifacts, test_filter):
     built_binaries = built_binary_inventory(checkout, config["bundle_id"], demo["native_test_target"])
     (artifacts / "built-binary-provenance.json").write_text(json.dumps(built_binaries, indent=2) + "\n", encoding="utf-8")
 
-    runtimes = json.loads(package.run(["xcrun", "simctl", "list", "runtimes", "--json"]))["runtimes"]
-    runtime = next((r for r in runtimes if r.get("isAvailable") and r.get("version") == demo["os_version"]
-                    and r.get("name", "").startswith("iOS ")), None)
-    types = json.loads(package.run(["xcrun", "simctl", "list", "devicetypes", "--json"]))["devicetypes"]
-    device = next((d for d in types if d["name"] == demo["device_type"]), None)
-    if not runtime or not device:
-        raise package.PackageError("The exact demo device/runtime is unavailable; no substitution attempted")
-    udid = package.run(["xcrun", "simctl", "create", "Draft Pocket isolated " + str(uuid.uuid4()),
-                        device["identifier"], runtime["identifier"]]).decode().strip()
-    uuid.UUID(udid)
-    identity = {"udid": udid, "device_type": demo["device_type"], "runtime": runtime["identifier"],
+    session = SimulatorSession(artifacts, device_type=demo["device_type"], os_version=demo["os_version"], label="capture")
+    identity = {"device_type": demo["device_type"],
                 "feature_commit": os.environ.get("DRAFT_POCKET_FEATURE_COMMIT"),
                 "tested_merge_commit": os.environ.get("GITHUB_SHA"),
                 "feature_patch_sha256": manifest["feature"]["patch"]["sha256"],
@@ -688,30 +696,30 @@ def capture(checkout, configuration, cache, artifacts, test_filter):
     identity_path = artifacts / "capture-identity.json"
     identity_path.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")
     recorder = None
+    recorder_log = None
     raw = artifacts / "draft-pocket-continuous-raw.mov"
-    ready = threading.Event()
     error = None
+    secondary_errors = []
     events = []
     try:
-        package.run(["xcrun", "simctl", "boot", udid])
-        package.run(["xcrun", "simctl", "bootstatus", udid, "-b"])
-        package.run(["xcrun", "simctl", "status_bar", udid, "override", "--time", "9:41", "--batteryState", "charged", "--batteryLevel", "100"])
+        udid = session.create()
+        identity.update({"udid": udid, "runtime": session.runtime})
+        identity_path.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")
+        session.prepare_framebuffer()
+        session.boot()
+        session.set_capture_status_bar()
+        session.probe_framebuffer()
+        recorder_path = artifacts / "capture-recorder.log"
+        recorder_log = recorder_path.open("xb")
+        identity["recorder_started_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        identity_path.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")
+        # Native output goes straight to disk, as in upstream AGENTS.md. A
+        # Python readline thread must not hide partial/unterminated diagnostics.
         recorder = subprocess.Popen(["xcrun", "simctl", "io", udid, "recordVideo", "--codec=h264", str(raw)],
-                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
-
-        def record_log():
-            with (artifacts / "capture-recorder.log").open("w", encoding="utf-8") as log:
-                for line in recorder.stdout:
-                    log.write(line)
-                    log.flush()
-                    if "Recording started" in line:
-                        ready.set()
-
-        reader = threading.Thread(target=record_log, daemon=True)
-        reader.start()
-        if not ready.wait(30) or recorder.poll() is not None:
-            raise package.PackageError("Simulator recording did not report ready; XCTest was not started")
+                                    stdout=recorder_log, stderr=subprocess.STDOUT)
+        wait_for_recorder(recorder, recorder_path)
         identity["recording_ready_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        identity_path.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")
         command = package.make_command(checkout, configuration, cache, "test") + [
             "--target", demo["native_test_target"], "--simulatorUDID", udid, "--testFilter", test_filter]
         with (artifacts / "demo-xctest.log").open("w", encoding="utf-8") as log:
@@ -748,32 +756,58 @@ def capture(checkout, configuration, cache, artifacts, test_filter):
             datetime.datetime.fromisoformat(identity["recording_ready_utc"]).timestamp(), time.time())
     except (package.PackageError, OSError, ValueError, zipfile.BadZipFile) as failure:
         error = failure
+        try:
+            session.health("capture-failure-before-recorder-stop")
+        except (package.PackageError, OSError) as health_error:
+            identity["failure_health_error"] = str(health_error)
     finally:
-        if recorder and recorder.poll() is None:
-            recorder.send_signal(signal.SIGINT)
-            try:
-                recorder.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                recorder.kill()
-                recorder.wait()
-                error = error or package.PackageError("Recorder did not finalize after SIGINT")
-        if recorder:
-            reader.join(timeout=5)
+        try:
+            if recorder and recorder.poll() is None:
+                recorder.send_signal(signal.SIGINT)
+                try:
+                    recorder.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    recorder.kill()
+                    recorder.wait(timeout=5)
+                    error = error or package.PackageError("Recorder did not finalize after SIGINT")
+            if recorder:
+                identity["recorder_exit_code"] = recorder.poll()
+            if recorder_log:
+                recorder_log.close()
+        except (OSError, subprocess.TimeoutExpired) as recorder_error:
+            identity["recorder_stop_error"] = str(recorder_error)
+            secondary_errors.append("recorder stop: " + str(recorder_error))
+            error = error or package.PackageError("Recorder termination failed; raw evidence retained")
         identity["finished_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        identity_path.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")
-        (artifacts / "action-timeline.json").write_text(json.dumps(events, indent=2) + "\n", encoding="utf-8")
-        # Only stop the device created above; never address `booted` or a user's device.
         try:
-            package.run(["xcrun", "simctl", "shutdown", udid])
-        except package.PackageError:
-            pass
-    if raw.is_file() and raw.stat().st_size:
+            identity_path.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")
+            (artifacts / "action-timeline.json").write_text(json.dumps(events, indent=2) + "\n", encoding="utf-8")
+        except OSError as evidence_error:
+            secondary_errors.append("capture evidence: " + str(evidence_error))
+        finally:
+            # Disk/evidence failure must never prevent owned-device cleanup or
+            # restoration of a temporary hosted-runner renderer preference.
+            try:
+                session.cleanup()
+            except (package.PackageError, OSError) as cleanup_error:
+                identity["cleanup_error"] = str(cleanup_error)
+                secondary_errors.append("owned cleanup: " + str(cleanup_error))
+                error = error or cleanup_error
+        identity["cleanup_finished_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        identity["secondary_errors"] = secondary_errors
         try:
+            identity_path.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")
+        except OSError as evidence_error:
+            secondary_errors.append("final capture evidence: " + str(evidence_error))
+    try:
+        if raw.is_file() and raw.stat().st_size:
             inspect_media(raw, artifacts)
-        except (package.PackageError, ValueError, KeyError, OSError) as failure:
-            error = error or failure
-    else:
-        error = error or package.PackageError("No actual recording was produced")
+        else:
+            error = error or package.PackageError("No actual recording was produced")
+    except (package.PackageError, ValueError, KeyError, OSError) as failure:
+        error = error or failure
+    if secondary_errors:
+        raise package.PackageError(str(error or "Capture evidence or cleanup failed") + "; additional failures: " + "; ".join(secondary_errors))
     if error:
         raise error
 

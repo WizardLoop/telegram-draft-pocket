@@ -29,9 +29,15 @@
       },
       {
         "action": "copy",
+        "source": "submodules/Postbox/Sources/PostboxDataValidation.swift",
+        "target": "submodules/Postbox/Sources/PostboxDataValidation.swift",
+        "sha256": "38aa9e91f395dd3e750dcb67512a706529c20e7b4bc145e2a96f744b275f9276"
+      },
+      {
+        "action": "copy",
         "source": "submodules/Postbox/Tests/MediaBoxDraftRetentionTests.swift",
         "target": "submodules/Postbox/Tests/MediaBoxDraftRetentionTests.swift",
-        "sha256": "77b06a575f25759fa86e1b0be24e0a0d8fffce81374a40ccd245c8d6b07e2eee"
+        "sha256": "da2e5048e9ca51c11712d803a9dfd499beb001890199c8275a21d1c394dda7e3"
       },
       {
         "action": "copy",
@@ -43,7 +49,7 @@
         "action": "copy",
         "source": "submodules/TelegramCore/Sources/TelegramEngine/Peers/DraftPocket.swift",
         "target": "submodules/TelegramCore/Sources/TelegramEngine/Peers/DraftPocket.swift",
-        "sha256": "c487e9782ecbc23c4fc2e181970ba146a7c5c001d8400b2d628a41f3264f5c4c"
+        "sha256": "029bf144b22198329f3a05ae81305ef811d8c51dc94beeac4019123f9feb5e22"
       },
       {
         "action": "copy",
@@ -55,25 +61,25 @@
         "action": "copy",
         "source": "submodules/TelegramCore/Sources/TelegramEngine/Peers/DraftPocketMediaOwnership.swift",
         "target": "submodules/TelegramCore/Sources/TelegramEngine/Peers/DraftPocketMediaOwnership.swift",
-        "sha256": "657304f5db01aaccdf0d705114c46d34a5c9067c136d713049caff96061f95a0"
+        "sha256": "98038f12b21db40a868318e3ce42830f3b1ac6ffbdafbb5a838a707d32c8c904"
       },
       {
         "action": "copy",
         "source": "submodules/TelegramCore/Sources/TelegramEngine/Peers/DraftPocketPreparedSend.swift",
         "target": "submodules/TelegramCore/Sources/TelegramEngine/Peers/DraftPocketPreparedSend.swift",
-        "sha256": "56015b45f99d4e9cde8e10cb7b816aa737adea1de54a05ed4e19383297ef13c2"
+        "sha256": "4af2504ae3d9ac01d83cf312ce3da245286e55c5bb387308b537c2059b8bed37"
       },
       {
         "action": "copy",
         "source": "submodules/TelegramCore/Tests/DraftPocketMediaLifecycleTests.swift",
         "target": "submodules/TelegramCore/Tests/DraftPocketMediaLifecycleTests.swift",
-        "sha256": "9c452adbe34fb5275e992c7c293596c32e3d65006e61532f4604b34b584ee220"
+        "sha256": "3a21aa9e818da365c027afcf7e33172e2418f788eba291f819892d2ff8a58b2a"
       },
       {
         "action": "copy",
         "source": "submodules/TelegramCore/Tests/DraftPocketTests.swift",
         "target": "submodules/TelegramCore/Tests/DraftPocketTests.swift",
-        "sha256": "f77b265cbe6bf2ea1875f0e3830556b00dc2c11c250f31487f39bcd3f3d7664c"
+        "sha256": "1e16387ebfa8796285e70143d66fa16c353ceb4723f471637dc81999ca6f840d"
       },
       {
         "action": "copy",
@@ -126,7 +132,7 @@
     ],
     "patch": {
       "source": "Integration/telegram-ios.patch",
-      "sha256": "9cf1eff6ff9f2008241135ec4a6505b5a79406b525b321d6dddd973a9999e3fa",
+      "sha256": "39f5caaaad76288273ee524aec6ba22cb45d6287255bf6c6b507c9ce5b5db65c",
       "files": [
         {
           "action": "modify",
@@ -187,6 +193,24 @@
           "target": "submodules/Postbox/Sources/TimeBasedCleanup.swift",
           "before_sha256": "578b98a3015e0948860bd956af71ed007668e6b787bd2d0f827821d48c1753c1",
           "after_sha256": "df84bac3721d4d5e568ac4d43b3b286f7e3fd81b532482ca806e035cf38b76ea"
+        },
+        {
+          "action": "modify",
+          "target": "submodules/Postbox/Sources/Utils/Decoder/AdaptedPostboxDecoder.swift",
+          "before_sha256": "3637581981fcb5806e1faaa61943736a5c3cfefa9c2c00161b7d786ad3dcb63a",
+          "after_sha256": "efaaca4ec520f277c584a7705536b34ba00b9f4e794293ee3edfb47758f01d99"
+        },
+        {
+          "action": "modify",
+          "target": "submodules/Postbox/Sources/Utils/Decoder/AdaptedPostboxKeyedDecodingContainer.swift",
+          "before_sha256": "ec898e932668e1efe376268f7df9af028258c35f7b86c6d08bcf7ac1e9949f64",
+          "after_sha256": "eaec8b8760def9dec54aa2bccaf778f290068a06a19cdd36d7d6680f405bdb94"
+        },
+        {
+          "action": "modify",
+          "target": "submodules/Postbox/Sources/Utils/Decoder/AdaptedPostboxUnkeyedDecodingContainer.swift",
+          "before_sha256": "d3c9ec69da401aa3efae74004989be21bdcfcab0434f5135188de3a5d8eb6830",
+          "after_sha256": "fe131b988768a0af974fb4fb3e50c4f7e18d2e804b65602d5b9ec8ffac4248ea"
         },
         {
           "action": "modify",

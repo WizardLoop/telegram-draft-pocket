@@ -125,7 +125,7 @@ func _internal_recoverDraftPocketSend(postbox: Postbox, operationId: String, exp
                         try graph.set(sendOwner, resources: [])
                         try graph.set(.card(peerId: peerId, threadId: recovery.threadId, id: item.id, deleted: false), resources: resources)
                         let pocketData = try AdaptedPostboxEncoder().encode(pocket)
-                        _ = try AdaptedPostboxDecoder().decode(DraftPocketState.self, from: pocketData)
+                        _ = try AdaptedPostboxDecoder(validateData: true).decode(DraftPocketState.self, from: pocketData)
                         let ownershipData = try graph.encodedForCommit()
                         DraftPocketMediaOwnership.commitEncoded(ownershipData, transaction: transaction)
                         transaction.setPreferencesEntry(key: PreferencesKeys.draftPocket(peerId: peerId, threadId: recovery.threadId), value: PreferencesEntry(data: pocketData))

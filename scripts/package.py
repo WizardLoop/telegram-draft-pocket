@@ -34,6 +34,17 @@ def native_test_spec(entry):
     return target, selection
 
 
+def native_simulator_spec(value):
+    if (not isinstance(value, dict) or set(value) != {"device_type", "os_version"}
+            or not isinstance(value["device_type"], str) or not 1 <= len(value["device_type"]) <= 80
+            or value["device_type"].strip() != value["device_type"]
+            or any(ord(char) < 32 for char in value["device_type"])
+            or not isinstance(value["os_version"], str)
+            or not re.fullmatch(r"[0-9]+\.[0-9]+(?:\.[0-9]+)?", value["os_version"])):
+        raise PackageError("BASE.json must pin native_test_simulator device_type and os_version")
+    return dict(value)
+
+
 class PackageError(Exception):
     pass
 
@@ -117,6 +128,8 @@ def base_config(root):
         raise PackageError("native_test_targets must be a list")
     for entry in targets:
         native_test_spec(entry)
+    if targets:
+        native_simulator_spec(base.get("native_test_simulator"))
     return base
 
 
@@ -576,27 +589,97 @@ def make_command(checkout, config, cache, command):
             "--disableProvisioningProfiles"]
 
 
-def run_native_tests(checkout, configuration, cache, targets):
+def run_native_tests(checkout, configuration, cache, targets, simulator_config=None, artifacts=None):
     if not targets:
         raise PackageError("No native feature test targets are registered in BASE.json")
-    # Validate the complete inventory before starting any target, then retain
-    # independent results even when an earlier target fails to compile or run.
+    # Compile before booting a full Simulator. A timed-out hosted XCTest must
+    # not leave an unknown runner-created device alive during later stages.
     specifications = [native_test_spec(entry) for entry in targets]
+    simulator_config = native_simulator_spec(simulator_config)
+    artifacts = Path(artifacts) if artifacts is not None else Path(tempfile.mkdtemp(prefix="draft-pocket-native-"))
+    artifacts.mkdir(parents=True, exist_ok=True)
+    report = {"simulator": simulator_config, "targets": [
+        {"target": target, "filter": selection, "build": "not_run", "test": "not_run"}
+        for target, selection in specifications], "lifecycle_errors": []}
     failures = []
-    for target, selection in specifications:
+
+    def save():
+        (artifacts / "native-target-results.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+
+    def failed(record, stage, identity, error):
+        record[stage] = "failed"
+        record[stage + "_error"] = str(error)
+        failures.append(f"{identity} [{stage}]: {error}")
+        print(f"Native test target FAILED: {failures[-1]}", file=sys.stderr, flush=True)
+        save()
+
+    print(f"Native Simulator evidence: {artifacts.resolve()}", flush=True)
+    save()
+    runnable = []
+    for index, (target, selection) in enumerate(specifications):
         identity = target + (f" [{selection}]" if selection else "")
-        print(f"Starting native test target: {identity}", flush=True)
-        selection_args = ["--testFilter", selection] if selection else []
+        record = report["targets"][index]
+        print(f"Building native test target: {identity}", flush=True)
+        record["build"] = "running"
+        save()
         try:
-            run(make_command(checkout, configuration, cache, "test") + ["--target", target, *selection_args],
+            run(make_command(checkout, configuration, cache, "test") + ["--target", target, "--buildOnly"],
                 cwd=checkout, capture=False)
         except (PackageError, OSError) as error:
-            failures.append(f"{identity}: {error}")
-            print(f"Native test target FAILED: {failures[-1]}", file=sys.stderr, flush=True)
+            failed(record, "build", identity, error)
         else:
-            print(f"Native test target PASSED: {identity}", flush=True)
-    if failures:
-        raise PackageError(f"{len(failures)} of {len(specifications)} native test targets failed:\n" + "\n".join(failures))
+            record["build"] = "passed"
+            runnable.append(index)
+            save()
+
+    if runnable:
+        from simulator import SimulatorSession
+        session = None
+        try:
+            session = SimulatorSession(artifacts, label="native", **simulator_config)
+            session.create()
+            report["simulator"].update(udid=session.udid, runtime=session.runtime)
+            save()
+            session.boot()
+            needs_reset = False
+            for index in runnable:
+                # A crashing test or Bazel timeout can leave XCTest/its app unhealthy.
+                # Restart only our device before another target; never erase its data.
+                if needs_reset:
+                    session.reset_after_failure()
+                    needs_reset = False
+                target, selection = specifications[index]
+                identity = target + (f" [{selection}]" if selection else "")
+                record = report["targets"][index]
+                selection_args = ["--testFilter", selection] if selection else []
+                print(f"Starting native test target: {identity}", flush=True)
+                record["test"] = "running"
+                save()
+                try:
+                    run(make_command(checkout, configuration, cache, "test") +
+                        ["--target", target, "--simulatorUDID", session.udid, *selection_args],
+                        cwd=checkout, capture=False)
+                except (PackageError, OSError) as error:
+                    failed(record, "test", identity, error)
+                    needs_reset = True
+                else:
+                    record["test"] = "passed"
+                    print(f"Native test target PASSED: {identity}", flush=True)
+                    save()
+        except (PackageError, OSError) as error:
+            report["lifecycle_errors"].append(f"Simulator setup/recovery: {error}")
+        finally:
+            if session is not None:
+                try:
+                    session.cleanup()
+                except (PackageError, OSError) as error:
+                    report["lifecycle_errors"].append(f"Simulator cleanup: {error}")
+            save()
+    if failures or report["lifecycle_errors"]:
+        not_run = sum(item["build"] == "passed" and item["test"] == "not_run" for item in report["targets"])
+        raise PackageError(f"{len(failures)} of {len(specifications)} native test targets failed; "
+                           f"{not_run} compiled targets did not run:\n" +
+                           "\n".join(failures + report["lifecycle_errors"]))
 
 
 def main(argv=None):
@@ -631,6 +714,7 @@ def main(argv=None):
     test.add_argument("--checkout", type=Path)
     test.add_argument("--configuration", type=Path)
     test.add_argument("--cache", type=Path)
+    test.add_argument("--artifacts", type=Path, help="Preserve owned native Simulator lifecycle and per-target results")
     test.add_argument("--with-demo", action="store_true")
     args = parser.parse_args(argv)
     if hasattr(args, "checkout") and args.checkout and args.command != "bootstrap":
@@ -667,12 +751,16 @@ def main(argv=None):
             if not args.checkout or not args.configuration or not args.cache:
                 raise PackageError("Native tests require --checkout, --configuration and --cache")
             base = toolchain(ROOT, args.checkout, args.configuration, args.with_demo)
-            run_native_tests(args.checkout, args.configuration.resolve(), args.cache.resolve(), base.get("native_test_targets", []))
+            run_native_tests(args.checkout, args.configuration.resolve(), args.cache.resolve(), base.get("native_test_targets", []),
+                             simulator_config=base.get("native_test_simulator"), artifacts=args.artifacts)
         else:
             print("Packaging tests PASS. Native feature tests, iOS build, UI/runtime and capture NOT RUN.")
 
 
 if __name__ == "__main__":
+    # The shared Simulator helper imports package. Keep one exception type when
+    # this file is the CLI entry point instead of loading it again as a module.
+    sys.modules.setdefault("package", sys.modules[__name__])
     try:
         main()
     except (PackageError, OSError, KeyError, UnicodeError) as error:

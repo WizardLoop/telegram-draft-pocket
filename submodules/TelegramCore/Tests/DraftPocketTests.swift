@@ -222,6 +222,50 @@ final class DraftPocketTests: XCTestCase {
         XCTAssertEqual(retained, data)
     }
 
+    func testMalformedPocketBytesStayUnchangedAndRejectTransfer() throws {
+        let peerId = self.peerId
+        for data in [Data([0xff, 0, 0x7f]), Data([2, 0x61]), Data([1, 0x61, 10, 0xff, 0xff, 0xff, 0xff])] {
+            _ = try self.value(self.postbox.transaction { transaction in
+                transaction.setPreferencesEntry(key: PreferencesKeys.draftPocket(peerId: peerId, threadId: nil), value: PreferencesEntry(data: data))
+            })
+            XCTAssertEqual(try self.view().error, .corruptStorage)
+            self.assertFailure(try self.perform(.putAside(snapshot: self.snapshot("keep me"), clearedState: self.opaque(""))), .corruptStorage)
+            XCTAssertEqual(try self.value(self.postbox.transaction { transaction in
+                transaction.getPreferencesEntry(key: PreferencesKeys.draftPocket(peerId: peerId, threadId: nil))?.data
+            }), data)
+        }
+    }
+
+    func testSnapshotValidatesItsOpaquePostboxPayloadsBeforeDecoding() throws {
+        let content = ChatInputContent(blocks: [.details(ChatInputDetails(content: ChatInputContent(blocks: [
+            .table(ChatInputTable(rows: [ChatInputTableRow(cells: [ChatInputTableCell(runs: [ChatInputRun(text: "nested")])])]))
+        ]), title: [ChatInputRun(text: "title")], expanded: true))])
+        let selection = DraftPocketSelection(ChatInputSelection(start: .init(path: [.init(blockIndex: 0), .init(blockIndex: 0), .init(blockIndex: 0)], offset: 2), end: .init(path: [.init(blockIndex: 0), .init(blockIndex: 0), .init(blockIndex: 0)], offset: 2)))
+        let contentData = try AdaptedPostboxEncoder().encode(content)
+        let stateData = try draftPocketActiveStateToken(self.opaque("nested"))
+        func encoded(content: Data, state: Data, emojiFiles: DraftPocketEmojiFiles) -> Data {
+            let encoder = PostboxEncoder()
+            encoder.encodeData(content, forKey: "content")
+            encoder.encode(selection, forKey: "selection")
+            encoder.encodeData(state, forKey: "interfaceState")
+            encoder.encode(emojiFiles, forKey: "emojiFiles")
+            return encoder.makeData()
+        }
+        let emojiFiles = DraftPocketEmojiFiles(content: content)
+        let valid = encoded(content: contentData, state: stateData, emojiFiles: emojiFiles)
+        let restored = try AdaptedPostboxDecoder(validateData: true).decode(DraftPocketSnapshot.self, from: valid)
+        XCTAssertEqual(restored.content, content)
+        XCTAssertEqual(restored.selection, selection.value)
+        XCTAssertEqual(try restored.interfaceState().opaqueData, self.opaque("nested").opaqueData)
+        for malformed in [Data([0xff, 0, 0x7f]), Data(contentData.dropLast())] {
+            XCTAssertThrowsError(try AdaptedPostboxDecoder(validateData: true).decode(DraftPocketSnapshot.self, from: encoded(content: malformed, state: stateData, emojiFiles: emojiFiles)))
+            XCTAssertThrowsError(try AdaptedPostboxDecoder(validateData: true).decode(DraftPocketSnapshot.self, from: encoded(content: contentData, state: malformed, emojiFiles: emojiFiles)))
+        }
+        let badEmoji = PostboxEncoder()
+        badEmoji.encodeDataArray([Data([0xff, 0, 0x7f])], forKey: "files")
+        XCTAssertThrowsError(try AdaptedPostboxDecoder(validateData: true).decode(DraftPocketEmojiFiles.self, from: badEmoji.makeData()))
+    }
+
     func testEncodingFailureDoesNotCommitEitherHalfOfTransfer() throws {
         let peerId = self.peerId
         let original = try draftPocketActiveStateToken(self.opaque("original"))

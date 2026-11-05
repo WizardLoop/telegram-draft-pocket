@@ -25,7 +25,7 @@ def main(argv=None):
     status = {"schema_version": 1, "started_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
               "feature_commit": os.environ.get("DRAFT_POCKET_FEATURE_COMMIT"),
               "tested_merge_commit": os.environ.get("GITHUB_SHA"), "upstream_commit": None,
-              "stages": {name: "not_run" for name in ("package_integrity", "portable_tests", "toolchain", "configuration", "reconstruction", "build", "native_tests", "capture")}}
+              "stages": {name: "not_run" for name in ("package_integrity", "portable_tests", "toolchain", "configuration", "reconstruction", "build", "capture", "native_tests")}}
     raw_config = os.environ.pop("DRAFT_POCKET_BUILD_CONFIGURATION_JSON", "")
     redactions = [raw_config] if raw_config else []
     last_stage = None
@@ -164,19 +164,8 @@ def main(argv=None):
                          "--configuration", configuration, "--cache", temporary / "draft-pocket-bazel-cache",
                          "--build-number", build_number, *demo_flags])
         status["stages"][stage] = "passed"
-        # Both checks depend on a built app, but capture does not depend on every
-        # independent native test target compiling. Preserve failure and continue.
-        stage = "native_tests"
-        status["stages"][stage] = "running"
-        save()
-        try:
-            invoke("native-tests", [sys.executable, ROOT / "scripts/package.py", "test", "--native",
-                                    "--checkout", checkout, "--configuration", configuration,
-                                    "--cache", temporary / "draft-pocket-bazel-cache", *demo_flags])
-        except (package.PackageError, OSError, ValueError, KeyError) as error:
-            record_failure(stage, error)
-        else:
-            status["stages"][stage] = "passed"
+        # Capture gets a clean Simulator lane and the available post-build time.
+        # Both checks remain independent: a failed capture still runs native tests.
         stage = "capture"
         status["stages"][stage] = "running"
         save()
@@ -186,6 +175,18 @@ def main(argv=None):
             invoke("capture", [sys.executable, ROOT / "scripts/capture-demo.py", "--checkout", checkout,
                                "--configuration", configuration, "--cache", temporary / "draft-pocket-bazel-cache",
                                "--artifacts", args.artifacts])
+        except (package.PackageError, OSError, ValueError, KeyError) as error:
+            record_failure(stage, error)
+        else:
+            status["stages"][stage] = "passed"
+        stage = "native_tests"
+        status["stages"][stage] = "running"
+        save()
+        try:
+            invoke("native-tests", [sys.executable, ROOT / "scripts/package.py", "test", "--native",
+                                    "--checkout", checkout, "--configuration", configuration,
+                                    "--cache", temporary / "draft-pocket-bazel-cache",
+                                    "--artifacts", args.artifacts / "native-tests", *demo_flags])
         except (package.PackageError, OSError, ValueError, KeyError) as error:
             record_failure(stage, error)
         else:

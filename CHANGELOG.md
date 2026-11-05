@@ -16,4 +16,6 @@
 - Verify installed Simulator app/framework hashes against the fresh test host and retain custom XCTest screenshots with a one-field patch to the same pinned runner.
 - Run portable validation on the actual Mac before the full build; resolve the UI test's declared host artifact across Bazel configuration transitions and macOS filesystem aliases.
 - Repair the pinned composer harness's missing share-screen protocol method, discovered by the actual native build.
+- Reject malformed Pocket persistence before legacy decoder assertions, with opt-in framing/container checks and native corruption regressions.
+- Prebuild native targets, address an explicitly owned Simulator, bound and record startup/cleanup phases, and attempt capture before the independent native suite.
 - Keep native runtime and capture results separate from source/packaging validation; refuse unsupported transfers before mutation.

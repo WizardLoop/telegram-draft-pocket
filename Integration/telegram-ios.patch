@@ -692,6 +692,253 @@ index b874fd269eec34983daf34a2be32cbf62ab1c7c3..af68b3ee66bfbf9f6b043ab413f30b1e
          })
      }
      
+diff --git a/submodules/Postbox/Sources/Utils/Decoder/AdaptedPostboxDecoder.swift b/submodules/Postbox/Sources/Utils/Decoder/AdaptedPostboxDecoder.swift
+index 267c999109311cca5a644cea3906167d1ef0e030..8ba2ac2269c73e27fdeb2c5d5fb6f91255e2c62d 100644
+--- a/submodules/Postbox/Sources/Utils/Decoder/AdaptedPostboxDecoder.swift
++++ b/submodules/Postbox/Sources/Utils/Decoder/AdaptedPostboxDecoder.swift
+@@ -25,10 +25,18 @@ public final class AdaptedPostboxDecoder {
+         }
+     }
+ 
+-    public init() {
++    private let validateData: Bool
++
++    /// Opt-in for records that must reject malformed persistence instead of invoking
++    /// the legacy decoder's programmer assertions. Ordinary callers retain their path.
++    public init(validateData: Bool = false) {
++        self.validateData = validateData
+     }
+ 
+     public func decode<T>(_ type: T.Type, from data: Data) throws -> T where T : Decodable {
++        if self.validateData && !PostboxDecoder.isWellFormedData(data) {
++            throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "Malformed Postbox record"))
++        }
+         return try self.decode(type, from: data, contentType: .object)
+     }
+ 
+@@ -40,7 +48,7 @@ public final class AdaptedPostboxDecoder {
+                 preconditionFailure()
+             }
+         }
+-        let decoder = _AdaptedPostboxDecoder(data: data, contentType: contentType)
++        let decoder = _AdaptedPostboxDecoder(data: data, contentType: contentType, validateData: self.validateData)
+         return try T(from: decoder)
+     }
+ }
+@@ -89,10 +97,12 @@ final class _AdaptedPostboxDecoder {
+ 
+     fileprivate let data: Data
+     fileprivate let contentType: AdaptedPostboxDecoder.ContentType
++    fileprivate let validateData: Bool
+     
+-    init(data: Data, contentType: AdaptedPostboxDecoder.ContentType) {
++    init(data: Data, contentType: AdaptedPostboxDecoder.ContentType, validateData: Bool = false) {
+         self.data = data
+         self.contentType = contentType
++        self.validateData = validateData
+     }
+ }
+ 
+@@ -101,27 +111,35 @@ extension _AdaptedPostboxDecoder: Decoder {
+         precondition(self.container == nil)
+     }
+         
+-    func container<Key>(keyedBy type: Key.Type) -> KeyedDecodingContainer<Key> where Key : CodingKey {
++    func container<Key>(keyedBy type: Key.Type) throws -> KeyedDecodingContainer<Key> where Key : CodingKey {
+         assertCanCreateContainer()
+ 
+-        let container = KeyedContainer<Key>(data: self.data, codingPath: self.codingPath, userInfo: self.userInfo)
++        if self.validateData {
++            guard case .object = self.contentType else {
++                throw DecodingError.dataCorrupted(.init(codingPath: self.codingPath, debugDescription: "Expected a Postbox object"))
++            }
++        }
++
++        let container = KeyedContainer<Key>(data: self.data, codingPath: self.codingPath, userInfo: self.userInfo, validateData: self.validateData)
+         self.container = container
+ 
+         return KeyedDecodingContainer(container)
+     }
+ 
+-    func unkeyedContainer() -> UnkeyedDecodingContainer {
++    func unkeyedContainer() throws -> UnkeyedDecodingContainer {
+         assertCanCreateContainer()
+ 
+         let decoder = PostboxDecoder(buffer: MemoryBuffer(data: self.data))
+ 
+-        // Every raw reader returns nil for a malformed value. `unkeyedContainer()`
+-        // cannot throw, so the container is created empty with `isCorrupted` set and
+-        // reports the corruption from its first `decode` instead.
++        // Preserve the ordinary raw readers' existing corruption path: an empty
++        // container with `isCorrupted` reports failure from its first decode.
+         var content: UnkeyedContainer.Content?
+         var isCorrupted = false
+         switch self.contentType {
+         case .object:
++            if self.validateData {
++                throw DecodingError.dataCorrupted(.init(codingPath: self.codingPath, debugDescription: "Expected a Postbox array"))
++            }
+             preconditionFailure()
+         case .int32Array:
+             if let array = decoder.decodeInt32ArrayRaw() {
+@@ -168,7 +186,7 @@ extension _AdaptedPostboxDecoder: Decoder {
+         }
+ 
+         if let content = content {
+-            let container = UnkeyedContainer(data: self.data, codingPath: self.codingPath, userInfo: self.userInfo, content: content, isCorrupted: isCorrupted)
++            let container = UnkeyedContainer(data: self.data, codingPath: self.codingPath, userInfo: self.userInfo, content: content, isCorrupted: isCorrupted, validateData: self.validateData)
+             self.container = container
+ 
+             return container
+@@ -177,7 +195,10 @@ extension _AdaptedPostboxDecoder: Decoder {
+         }
+     }
+     
+-    func singleValueContainer() -> SingleValueDecodingContainer {
++    func singleValueContainer() throws -> SingleValueDecodingContainer {
++        if self.validateData {
++            throw DecodingError.dataCorrupted(.init(codingPath: self.codingPath, debugDescription: "Unsupported Postbox single value"))
++        }
+         preconditionFailure()
+     }
+ }
+diff --git a/submodules/Postbox/Sources/Utils/Decoder/AdaptedPostboxKeyedDecodingContainer.swift b/submodules/Postbox/Sources/Utils/Decoder/AdaptedPostboxKeyedDecodingContainer.swift
+index 63a79a17c7b0bc5fdf52a86d68fc8f77ee5c0e1e..c81616bf79d14aadb3b7a1bb5cd586f3a3eee37e 100644
+--- a/submodules/Postbox/Sources/Utils/Decoder/AdaptedPostboxKeyedDecodingContainer.swift
++++ b/submodules/Postbox/Sources/Utils/Decoder/AdaptedPostboxKeyedDecodingContainer.swift
+@@ -5,11 +5,13 @@ extension _AdaptedPostboxDecoder {
+         var codingPath: [CodingKey]
+         var userInfo: [CodingUserInfoKey: Any]
+         let decoder: PostboxDecoder
++        let validateData: Bool
+ 
+-        init(data: Data, codingPath: [CodingKey], userInfo: [CodingUserInfoKey : Any]) {
++        init(data: Data, codingPath: [CodingKey], userInfo: [CodingUserInfoKey : Any], validateData: Bool = false) {
+             self.codingPath = codingPath
+             self.userInfo = userInfo
+             self.decoder = PostboxDecoder(buffer: MemoryBuffer(data: data))
++            self.validateData = validateData
+         }
+     }
+ }
+@@ -44,7 +46,7 @@ extension _AdaptedPostboxDecoder.KeyedContainer: KeyedDecodingContainerProtocol
+                 }
+             }
+             if let mappedType = AdaptedPostboxDecoder.ContentType(valueType: valueType) {
+-                return try AdaptedPostboxDecoder().decode(T.self, from: data, contentType: mappedType)
++                return try AdaptedPostboxDecoder(validateData: self.validateData).decode(T.self, from: data, contentType: mappedType)
+             } else {
+                 switch valueType {
+                 case .Bytes:
+diff --git a/submodules/Postbox/Sources/Utils/Decoder/AdaptedPostboxUnkeyedDecodingContainer.swift b/submodules/Postbox/Sources/Utils/Decoder/AdaptedPostboxUnkeyedDecodingContainer.swift
+index ebc3a779d7ace6b69e188fd549ec95ff91c2e753..71f12ca139cd1132db28da1cafd09896ac4eff09 100644
+--- a/submodules/Postbox/Sources/Utils/Decoder/AdaptedPostboxUnkeyedDecodingContainer.swift
++++ b/submodules/Postbox/Sources/Utils/Decoder/AdaptedPostboxUnkeyedDecodingContainer.swift
+@@ -31,11 +31,12 @@ extension _AdaptedPostboxDecoder {
+         let codingPath: [CodingKey]
+         let userInfo: [CodingUserInfoKey: Any]
+         let content: Content
+-        /// Set when the array bytes could not be split into elements. `Decoder.unkeyedContainer()`
+-        /// cannot throw, so the container is created anyway and every `decode` throws
++        /// Set when the array bytes could not be split into elements. Preserve the existing
++        /// behavior: the container is created anyway and every `decode` throws
+         /// `DecodingError.dataCorrupted`; `isAtEnd` stays false so `Array(from:)` reaches that throw
+         /// instead of returning an empty array.
+         let isCorrupted: Bool
++        let validateData: Bool
+ 
+         var count: Int? {
+             if self.isCorrupted {
+@@ -57,23 +58,40 @@ extension _AdaptedPostboxDecoder {
+             return self._currentIndex
+         }
+        
+-        init(data: Data, codingPath: [CodingKey], userInfo: [CodingUserInfoKey: Any], content: Content, isCorrupted: Bool = false) {
++        init(data: Data, codingPath: [CodingKey], userInfo: [CodingUserInfoKey: Any], content: Content, isCorrupted: Bool = false, validateData: Bool = false) {
+             self.codingPath = codingPath
+             self.userInfo = userInfo
+             self.content = content
+             self.isCorrupted = isCorrupted
++            self.validateData = validateData
+         }
+ 
+         fileprivate func throwIfCorrupted() throws {
+             if self.isCorrupted {
+                 throw DecodingError.dataCorrupted(DecodingError.Context(codingPath: self.codingPath, debugDescription: "Malformed object array"))
+             }
++            if self.validateData && self._currentIndex >= self.content.count {
++                throw DecodingError.dataCorrupted(.init(codingPath: self.codingPath, debugDescription: "Postbox array is exhausted"))
++            }
++        }
++
++        fileprivate func cast<T>(_ value: Any, to type: T.Type) throws -> T {
++            if self.validateData {
++                guard let result = value as? T else {
++                    throw DecodingError.typeMismatch(type, .init(codingPath: self.codingPath, debugDescription: "Unexpected Postbox array element type"))
++                }
++                return result
++            }
++            return value as! T
+         }
+     }
+ }
+ 
+ extension _AdaptedPostboxDecoder.UnkeyedContainer: UnkeyedDecodingContainer {
+     func decodeNil() throws -> Bool {
++        if self.validateData {
++            throw DecodingError.dataCorrupted(.init(codingPath: self.codingPath, debugDescription: "Postbox arrays do not contain nil"))
++        }
+         preconditionFailure()
+     }
+ 
+@@ -86,7 +104,7 @@ extension _AdaptedPostboxDecoder.UnkeyedContainer: UnkeyedDecodingContainer {
+                 self._currentIndex += 1
+                 return array[index] as! T
+             default:
+-                assertionFailure()
++                if !self.validateData { assertionFailure() }
+                 throw DecodingError.typeMismatch(Data.self, DecodingError.Context(codingPath: self.codingPath, debugDescription: ""))
+             }
+         } else {
+@@ -96,7 +114,7 @@ extension _AdaptedPostboxDecoder.UnkeyedContainer: UnkeyedDecodingContainer {
+                 self._currentIndex += 1
+ 
+                 let data = array[index]
+-                return try AdaptedPostboxDecoder().decode(T.self, from: data)
++                return try AdaptedPostboxDecoder(validateData: self.validateData).decode(T.self, from: data, contentType: .object)
+             case let .objectDict(dict):
+                 let index = self._currentIndex
+                 self._currentIndex += 1
+@@ -108,24 +126,24 @@ extension _AdaptedPostboxDecoder.UnkeyedContainer: UnkeyedDecodingContainer {
+                 } else {
+                     data = dataPair.1
+                 }
+-                return try AdaptedPostboxDecoder().decode(T.self, from: data)
++                return try AdaptedPostboxDecoder(validateData: self.validateData).decode(T.self, from: data, contentType: .object)
+             case let .int32Array(array):
+                 let index = self._currentIndex
+                 self._currentIndex += 1
+ 
+-                return array[index] as! T
++                return try self.cast(array[index], to: type)
+             case let .int64Array(array):
+                 let index = self._currentIndex
+                 self._currentIndex += 1
+ 
+-                return array[index] as! T
++                return try self.cast(array[index], to: type)
+             case let .stringArray(array):
+                 let index = self._currentIndex
+                 self._currentIndex += 1
+ 
+-                return array[index] as! T
++                return try self.cast(array[index], to: type)
+             default:
+-                assertionFailure()
++                if !self.validateData { assertionFailure() }
+                 throw DecodingError.typeMismatch(T.self, DecodingError.Context(codingPath: self.codingPath, debugDescription: ""))
+             }
+         }
 diff --git a/submodules/TelegramCore/BUILD b/submodules/TelegramCore/BUILD
 index d4ed7767a2606d67bebfb62f4f0699c423a22528..edbb0bfb7260b785853665c4439eb295a1f19bce 100644
 --- a/submodules/TelegramCore/BUILD

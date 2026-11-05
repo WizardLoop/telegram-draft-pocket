@@ -2,7 +2,7 @@
 
 Put an unfinished Telegram iOS message aside, answer a quick question, and return to the draft.
 
-**Implementation draft.** The expanded integration and its UI test target compile on macOS. The latest attempt stopped in validation/capture tooling before native tests or Simulator interaction; no recording exists yet. The source is on [`feature/draft-pocket`](https://github.com/WizardLoop/telegram-draft-pocket/tree/feature/draft-pocket) in [Draft PR #1](https://github.com/WizardLoop/telegram-draft-pocket/pull/1), pending review into `main`.
+**Implementation draft.** The full app and UI test target compile on macOS; three native test targets passed. The latest attempt exposed a corrupt-storage decoding crash, a harness startup timeout and a recorder startup failure. No recording exists yet. The source is on [`feature/draft-pocket`](https://github.com/WizardLoop/telegram-draft-pocket/tree/feature/draft-pocket) in [Draft PR #1](https://github.com/WizardLoop/telegram-draft-pocket/pull/1), pending review into `main`.
 
 ## Demo
 
@@ -20,7 +20,7 @@ You are writing a long formatted message when a quick question arrives. Open Dra
 - Native composer entry and list, local English/Hebrew strings, accessibility labels, theme and Reduce Motion handling.
 - Durable media archives, transactional owners for cards/Undo/active drafts/pending messages, and explicit recovery of interrupted composer sends; native validation pending.
 
-Media transfers require complete, verified resource bytes before the composer can be cleared. Missing or unsupported resources are refused. The newly integrated ownership lifecycle and its native byte tests have not run yet; full media support is not verified. The full-client offline fixture and supported XCTest scenario are prepared; native build/runtime validation and visual QA remain outstanding. See [limitations](docs/LIMITATIONS.md).
+Media transfers require complete, verified resource bytes before the composer can be cleared. Missing or unsupported resources are refused. The MediaBox retention target passed, but the Core ownership suite stopped at the corrupt-metadata case; full media support is not verified. The full-client offline fixture and supported XCTest scenario are prepared; runtime validation and visual QA remain outstanding. See [limitations](docs/LIMITATIONS.md).
 
 Pocket cards remain on this device; the active draft uses Telegram's existing synchronization. No server API or Pocket cloud sync is added. Secret Chats, sent-message editing, unfinished recordings and independent forms are excluded.
 
