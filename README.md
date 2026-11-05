@@ -2,7 +2,7 @@
 
 Put an unfinished Telegram iOS message aside, answer a quick question, and return to the draft.
 
-**Implementation draft.** The last completed macOS attempt built the full app and UI test target and passed the previously crashing corrupt-storage case. It then exposed a cold-reopen storage failure and a Simulator startup timeout. Corrections need native validation, and no recording exists yet. The source is on [`feature/draft-pocket`](https://github.com/WizardLoop/telegram-draft-pocket/tree/feature/draft-pocket) in [Draft PR #1](https://github.com/WizardLoop/telegram-draft-pocket/pull/1), pending review into `main`.
+**Implementation draft.** The full app and all test targets compiled on macOS, but startup checks prevented the latest runtime tests and recording. An earlier run passed the corrected corrupt-storage case, then exposed a cold-reopen failure. The latest fixes need native validation, and no recording exists yet. The source is on [`feature/draft-pocket`](https://github.com/WizardLoop/telegram-draft-pocket/tree/feature/draft-pocket) in [Draft PR #1](https://github.com/WizardLoop/telegram-draft-pocket/pull/1), pending review into `main`.
 
 ## Demo
 
@@ -57,6 +57,8 @@ bash scripts/test.sh --native --checkout "/path/to/new/telegram-ios" \
 ```
 
 This is not a credential-free one-command app build. Packaging checks can run on Windows/Linux; iOS validation requires the pinned Apple toolchain. [Manual GitHub Actions instructions](docs/CI.md) cover the compatible standard `xcode-27` runner, owner configuration, real failure artifacts and capture blockers. No paid Mac service is used.
+
+The separate manual `editor` lane runs the three legacy UIKit selection cases without Telegram credentials or a full-client build. Its native results are reported independently from the five Bazel targets and the full-client demo.
 
 ## Documentation
 

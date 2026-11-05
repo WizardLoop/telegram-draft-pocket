@@ -19,9 +19,12 @@ def utc_now():
 
 
 class SimulatorSession:
-    def __init__(self, artifacts, device_type="iPhone 17", os_version="27.0", label="native"):
+    def __init__(self, artifacts, device_type="iPhone 17", os_version="27.0", label="native", boot_timeout=180):
         if not re.fullmatch(r"[a-z][a-z0-9-]{0,39}", label):
             raise package.PackageError("Invalid owned Simulator label")
+        if type(boot_timeout) is not int or not 30 <= boot_timeout <= 300:
+            raise package.PackageError("Simulator boot timeout must be an integer from 30 to 300 seconds")
+        self.boot_timeout = boot_timeout
         self.artifacts = Path(artifacts).resolve()
         self.artifacts.mkdir(parents=True, exist_ok=True)
         self.device_type, self.os_version, self.label = device_type, os_version, label
@@ -243,7 +246,7 @@ class SimulatorSession:
             self._run("boot", ["xcrun", "simctl", "boot", self.udid], timeout=30)
             # Separate OS startup from XCTest's execution budget; this replaces
             # the old unbounded bootstatus call, not the recorder's ready guard.
-            self._run("bootstatus", ["xcrun", "simctl", "bootstatus", self.udid, "-b"], timeout=180)
+            self._run("bootstatus", ["xcrun", "simctl", "bootstatus", self.udid, "-b"], timeout=self.boot_timeout)
         finally:
             self.health("after-boot")
 

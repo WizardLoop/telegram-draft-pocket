@@ -7,6 +7,14 @@ on:
     types: [labeled]
   workflow_dispatch:
     inputs:
+      lane:
+        description: 'Validation lane'
+        required: true
+        default: full-client
+        type: choice
+        options:
+          - full-client
+          - editor
       included_usage_verified:
         description: 'I verified up to 120 macOS minutes and 1-day artifacts fit existing included usage; no charges'
         required: true
@@ -19,14 +27,14 @@ permissions:
 concurrency:
   # Keep evidence for an older build while a new source revision is tested.
   # Requests for the same revision still serialize.
-  group: draft-pocket-simulator-${{ github.ref }}-${{ github.event.pull_request.head.sha || github.sha }}
+  group: draft-pocket-simulator-${{ github.event.label.name || inputs.lane || 'full-client' }}-${{ github.ref }}-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: false
 
 jobs:
   simulator:
     if: >-
       ${{ github.event.repository.private == false &&
-          ((github.event_name == 'workflow_dispatch' && inputs.included_usage_verified) ||
+          ((github.event_name == 'workflow_dispatch' && inputs.lane == 'full-client' && inputs.included_usage_verified) ||
            (github.event_name == 'pull_request' && github.event.label.name == 'run-simulator' &&
             github.event.pull_request.head.repo.full_name == github.repository)) }}
     # Standard Apple Silicon runner, never a paid -large/-xlarge runner.
@@ -55,4 +63,33 @@ jobs:
           retention-days: 1
           # Raw video and PNGs are already compressed; avoid spending the timeout recompressing them.
           compression-level: 0
+          include-hidden-files: false
+
+  editor:
+    if: >-
+      ${{ github.event.repository.private == false &&
+          ((github.event_name == 'workflow_dispatch' && inputs.lane == 'editor' && inputs.included_usage_verified) ||
+           (github.event_name == 'pull_request' && github.event.label.name == 'run-editor-simulator' &&
+            github.event.pull_request.head.repo.full_name == github.repository)) }}
+    runs-on: xcode-27
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Run the three native legacy editor selection tests
+        env:
+          DRAFT_POCKET_FEATURE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python3 scripts/editor-simulator.py --artifacts "$RUNNER_TEMP/draft-pocket-editor-evidence"
+      - name: Preserve raw logs and native result JSON even after failure
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: draft-pocket-editor-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/draft-pocket-editor-evidence/
+          if-no-files-found: warn
+          retention-days: 1
           include-hidden-files: false
