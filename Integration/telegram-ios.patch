@@ -93,7 +93,7 @@ index 7a8590d5d3cfa96dde5c8a7151d15128a4fbc144..bcaa87b7e7b2af870bb6c09d89327cd3
      name = "ComposerHarnessUITestsLib",
      testonly = True,
 diff --git a/build-system/Make/Make.py b/build-system/Make/Make.py
-index 4c3a64199fab8af21e55dea47b3b7deb0eb1f64f..e62cb4a964503706d94fb05ec3f536893ea0e834 100644
+index 4c3a64199fab8af21e55dea47b3b7deb0eb1f64f..610661d135606cf86bd565f965db31b9b39d5b2a 100644
 --- a/build-system/Make/Make.py
 +++ b/build-system/Make/Make.py
 @@ -8,6 +8,7 @@ import tempfile
@@ -134,7 +134,7 @@ index 4c3a64199fab8af21e55dea47b3b7deb0eb1f64f..e62cb4a964503706d94fb05ec3f53689
 +            combined_arguments += ['--test_output=all' if simulator_udid else '--test_output=errors']
 +        if simulator_udid is not None and not build_only:
 +            # The pinned rules_apple runner supports this public destination flag.
-+            simulator_udid = str(uuid.UUID(simulator_udid))
++            simulator_udid = str(uuid.UUID(simulator_udid)).upper()
 +            combined_arguments += ['--test_arg=--destination=platform=ios_simulator,id=' + simulator_udid]
 +        if test_filter is not None and not build_only:
 +            combined_arguments += ['--test_filter=' + test_filter]
@@ -186,7 +186,7 @@ index 4c3a64199fab8af21e55dea47b3b7deb0eb1f64f..e62cb4a964503706d94fb05ec3f53689
      add_project_and_build_common_arguments(testParser)
 +    testParser.add_argument(
 +        '--simulatorUDID',
-+        type=lambda value: str(uuid.UUID(value)),
++        type=lambda value: str(uuid.UUID(value)).upper(),
 +        help='Run on this existing dedicated Simulator UUID (public rules_apple destination).'
 +    )
 +    testParser.add_argument('--buildOnly', action='store_true', default=False,

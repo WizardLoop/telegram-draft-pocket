@@ -2,7 +2,7 @@
 
 Put an unfinished Telegram iOS message aside, answer a quick question, and return to the draft.
 
-**Implementation draft.** The full app and all test targets compiled on macOS, but startup checks prevented the latest runtime tests and recording. An earlier run passed the corrected corrupt-storage case, then exposed a cold-reopen failure. The latest fixes need native validation, and no recording exists yet. The source is on [`feature/draft-pocket`](https://github.com/WizardLoop/telegram-draft-pocket/tree/feature/draft-pocket) in [Draft PR #1](https://github.com/WizardLoop/telegram-draft-pocket/pull/1), pending review into `main`.
+**Implementation draft.** The completed `d02b731` Mac run built the full app and passed all 54 hostless native cases, including media cold reopen. Three legacy UIKit selection cases passed separately. The hosted composer harness could not select its Simulator, and capture stopped at a status-bar timeout before recording. The newer database-error correction still needs native validation; no video exists. The source is on [`feature/draft-pocket`](https://github.com/WizardLoop/telegram-draft-pocket/tree/feature/draft-pocket) in [Draft PR #1](https://github.com/WizardLoop/telegram-draft-pocket/pull/1), pending review into `main`.
 
 ## Demo
 
@@ -18,9 +18,9 @@ You are writing a long formatted message when a quick question arrives. Open Dra
 - Atomic pocket/active-draft transfers with revision checks, safe swap, Delete/Undo and restart recovery of pending deletes.
 - Canonical rich content, structural selection, custom-emoji file metadata, reply/quote and local composer-state persistence.
 - Native composer entry and list, local English/Hebrew strings, accessibility labels, theme and Reduce Motion handling.
-- Durable media archives, transactional owners for cards/Undo/active drafts/pending messages, and explicit recovery of interrupted composer sends; native validation pending.
+- Durable media archives, transactional owners for cards/Undo/active drafts/pending messages, and explicit recovery of interrupted composer sends; byte-retention and lifecycle cases passed at `d02b731`.
 
-Media transfers require complete, verified resource bytes before the composer can be cleared. Missing or unsupported resources are refused. The MediaBox retention target passed on an earlier revision; the latest Core ownership suite passed corrupt-metadata handling but failed cold reopen, so full media support is not verified. The full-client offline fixture and supported XCTest scenario are prepared; runtime validation and visual QA remain outstanding. See [limitations](docs/LIMITATIONS.md).
+Media transfers require complete, verified resource bytes before the composer can be cleared. Missing or unsupported resources are refused. All 15 MediaBox and 10 Core media-lifecycle cases passed in the completed Mac run; this does not establish every upload, crash or interaction scenario. The latest SQL-first startup correction passed 114 portable checks and reconstruction on Linux, but has not run on a Mac. Hosted composer tests, the full-client story and visual QA remain outstanding. See [test evidence](docs/TESTING.md) and [limitations](docs/LIMITATIONS.md).
 
 Pocket cards remain on this device; the active draft uses Telegram's existing synchronization. No server API or Pocket cloud sync is added. Secret Chats, sent-message editing, unfinished recordings and independent forms are excluded.
 

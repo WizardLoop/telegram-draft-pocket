@@ -19,7 +19,7 @@ def utc_now():
 
 
 class SimulatorSession:
-    def __init__(self, artifacts, device_type="iPhone 17", os_version="27.0", label="native", boot_timeout=180):
+    def __init__(self, artifacts, device_type="iPhone 17", os_version="27.0", label="native", boot_timeout=300):
         if not re.fullmatch(r"[a-z][a-z0-9-]{0,39}", label):
             raise package.PackageError("Invalid owned Simulator label")
         if type(boot_timeout) is not int or not 30 <= boot_timeout <= 300:
@@ -264,7 +264,7 @@ class SimulatorSession:
             raise package.PackageError("Simulator framebuffer dimensions are invalid")
         pixels = self._run("framebuffer-decode", ["ffmpeg", "-v", "error", "-i", destination,
             "-frames:v", "1", "-vf", "scale=16:16", "-pix_fmt", "gray", "-f", "rawvideo", "pipe:1"],
-            timeout=15, public_output=False)
+            timeout=30, public_output=False)
         if len(pixels) != 256 or max(pixels) - min(pixels) < 8:
             raise package.PackageError("Simulator framebuffer is undecodable or blank after boot")
         self.evidence["framebuffer"] = {"file": destination.name, "width": width, "height": height,
@@ -276,13 +276,13 @@ class SimulatorSession:
     def set_capture_status_bar(self):
         self._require_owned()
         self._run("status-bar", ["xcrun", "simctl", "status_bar", self.udid, "override",
-            "--time", "9:41", "--batteryState", "charged", "--batteryLevel", "100"], timeout=15)
+            "--time", "9:41", "--batteryState", "charged", "--batteryLevel", "100"], timeout=60)
 
     def _shutdown(self, name, *, cleanup=False):
         self._require_owned()
         try:
             devices = json.loads(self._run(name + "-state", ["xcrun", "simctl", "list", "devices", "--json"],
-                                           timeout=15, public_output=False, cleanup=cleanup))["devices"]
+                                           timeout=60, public_output=False, cleanup=cleanup))["devices"]
             owned = [item for items in devices.values() for item in items if item.get("udid", "").upper() == self.udid]
             if len(owned) != 1:
                 raise package.PackageError("Owned Simulator is missing or ambiguous during shutdown")

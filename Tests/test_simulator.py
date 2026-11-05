@@ -33,7 +33,7 @@ class SimulatorSessionTests(unittest.TestCase):
     def command(self, command, **kwargs):
         self.commands.append(command)
         self.assertGreater(kwargs["timeout"], 0)
-        self.assertLessEqual(kwargs["timeout"], 180)
+        self.assertLessEqual(kwargs["timeout"], 300)
         value, code = b"", 0
         if command[0] == "/usr/sbin/sysctl":
             value = b"hw.memsize: 15000000000\nvm.swapusage: total = 2M\n"
@@ -121,13 +121,44 @@ class SimulatorSessionTests(unittest.TestCase):
                 raise subprocess.TimeoutExpired(args, kwargs["timeout"], output=b"Waiting for SpringBoard\n")
             return self.command(args, **kwargs)
         self.run.side_effect = command
-        with self.assertRaisesRegex(package.PackageError, "bootstatus exceeded 180s"):
+        with self.assertRaisesRegex(package.PackageError, "bootstatus exceeded 300s"):
             self.session.boot()
         phase = next(item for item in self.session.evidence["phases"] if item["name"] == "bootstatus")
         self.assertEqual(phase["status"], "timed_out")
         self.assertEqual((self.session.artifacts / phase["log"]).read_bytes(), b"Waiting for SpringBoard\n")
         self.session.cleanup()
         self.assertIsNone(self.state)
+
+    def test_capture_setup_timeout_retains_failure_and_cleans_owned_device(self):
+        self.session.create()
+        self.session.boot()
+        def command(args, **kwargs):
+            if args[:3] == ["xcrun", "simctl", "status_bar"]:
+                self.assertEqual(kwargs["timeout"], 60)
+                raise subprocess.TimeoutExpired(args, kwargs["timeout"], output=b"Waiting for SpringBoard service\n")
+            return self.command(args, **kwargs)
+        self.run.side_effect = command
+        with self.assertRaisesRegex(package.PackageError, "status-bar exceeded 60s"):
+            self.session.set_capture_status_bar()
+        phase = next(item for item in self.session.evidence["phases"] if item["name"] == "status-bar")
+        self.assertEqual(phase["status"], "timed_out")
+        self.assertIn(b"Waiting for SpringBoard", (self.session.artifacts / phase["log"]).read_bytes())
+        self.session.cleanup()
+        self.assertIsNone(self.state)
+
+    def test_cleanup_state_timeout_still_deletes_only_owned_device_and_reports_failure(self):
+        self.session.create()
+        self.state = "Booted"
+        def command(args, **kwargs):
+            if args[:4] == ["xcrun", "simctl", "list", "devices"] and kwargs["timeout"] == 60:
+                raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+            return self.command(args, **kwargs)
+        self.run.side_effect = command
+        with self.assertRaisesRegex(package.PackageError, "shutdown-state exceeded 60s"):
+            self.session.cleanup()
+        self.assertIsNone(self.state)
+        deletes = [args for args in self.commands if args[:3] == ["xcrun", "simctl", "delete"]]
+        self.assertEqual(deletes, [["xcrun", "simctl", "delete", self.udid]])
 
     def test_reset_of_already_shutdown_owned_device_still_boots(self):
         self.session.create()

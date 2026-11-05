@@ -203,7 +203,7 @@ class EditorLifecycleTests(unittest.TestCase):
     def test_shared_boot_timeout_default_and_editor_bound(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            self.assertEqual(editor.SimulatorSession(root / "default").boot_timeout, 180)
+            self.assertEqual(editor.SimulatorSession(root / "default").boot_timeout, 300)
             self.assertEqual(editor.SimulatorSession(root / "editor", boot_timeout=300).boot_timeout, 300)
             for value in (0, 29, 301, True, 180.0, "300"):
                 with self.subTest(value=value), self.assertRaises(editor.package.PackageError):

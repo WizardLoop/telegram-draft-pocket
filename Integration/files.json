@@ -132,7 +132,7 @@
     ],
     "patch": {
       "source": "Integration/telegram-ios.patch",
-      "sha256": "662d50879b90c64c2b3a28a4d64774bd3fd1b9f62308b395afc8c497abeb5719",
+      "sha256": "61c3b4ccc5229c7b9182728167bd3df4ad9e1d7740efdc52fb5232b727b8f7d0",
       "files": [
         {
           "action": "modify",
@@ -156,7 +156,7 @@
           "action": "modify",
           "target": "build-system/Make/Make.py",
           "before_sha256": "38fa0a759195cbe4fba872b837de076dab57f28150ff80ae5d11d048102b974e",
-          "after_sha256": "0425d9ade4dbe255c9eefed27004e01e47892451fd84ca04a70821ddbb13f3cb"
+          "after_sha256": "9e477d774accc8eb0111cb7c60b907f79d4917bad0abcda78043b49892376b83"
         },
         {
           "action": "modify",
