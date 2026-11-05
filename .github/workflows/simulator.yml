@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       included_usage_verified:
-        description: 'I verified up to 90 macOS minutes and 1-day artifacts fit existing included usage; no charges'
+        description: 'I verified up to 120 macOS minutes and 1-day artifacts fit existing included usage; no charges'
         required: true
         default: false
         type: boolean
@@ -32,7 +32,7 @@ jobs:
     # Standard Apple Silicon runner, never a paid -large/-xlarge runner.
     # Private repositories are excluded by the job guard.
     runs-on: xcode-27
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:

@@ -45,6 +45,7 @@
     "submodules/TelegramCore/Sources/PendingMessages/EnqueueMessage.swift",
     "submodules/TelegramCore/Sources/SyncCore/SyncCore_Namespaces.swift",
     "submodules/TelegramCore/Sources/TelegramEngine/Peers/TelegramEnginePeers.swift",
+    "submodules/TelegramCore/Sources/Utils/Coding.swift",
     "submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/ChatRichTextInputNode.swift",
     "submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer/BUILD",
     "submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer/Sources/RichTextEditorChatInputNode.swift",

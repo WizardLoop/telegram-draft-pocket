@@ -84,7 +84,9 @@ final class DraftPocketTests: XCTestCase {
 
     private func opaque(_ text: String) -> OpaqueChatInterfaceState {
         let sync = text.isEmpty ? nil : SynchronizeableChatInputState(replySubject: nil, text: text, entities: [], timestamp: 1000, textSelection: nil, messageEffectId: nil, suggestedPost: nil)
-        return OpaqueChatInterfaceState(opaqueData: Data(text.utf8), historyScrollMessageIndex: nil, mediaDraftState: nil, synchronizeableInputState: sync)
+        let encoder = PostboxEncoder()
+        encoder.encodeString(text, forKey: "fixtureText")
+        return OpaqueChatInterfaceState(opaqueData: encoder.makeData(), historyScrollMessageIndex: nil, mediaDraftState: nil, synchronizeableInputState: sync)
     }
 
     private func snapshot(_ text: String) throws -> DraftPocketSnapshot {
@@ -127,7 +129,7 @@ final class DraftPocketTests: XCTestCase {
         let selection = ChatInputSelection(start: position, end: position)
         let reply = EngineMessageReplySubject(messageId: MessageId(peerId: self.peerId, namespace: Namespaces.Message.Cloud, id: 7), quote: EngineMessageReplyQuote(text: "quote", offset: 2, entities: [], media: nil, richText: nil), innerSubject: nil)
         let sync = SynchronizeableChatInputState(replySubject: reply, text: "ignored preview", entities: [], timestamp: 123, textSelection: nil, messageEffectId: nil, suggestedPost: nil)
-        let state = OpaqueChatInterfaceState(opaqueData: Data([1, 2, 3]), historyScrollMessageIndex: nil, mediaDraftState: nil, synchronizeableInputState: sync)
+        let state = OpaqueChatInterfaceState(opaqueData: self.opaque("opaque payload").opaqueData, historyScrollMessageIndex: nil, mediaDraftState: nil, synchronizeableInputState: sync)
         let snapshot = try DraftPocketSnapshot(content: content, selection: selection, state: state)
         let encoded = try AdaptedPostboxEncoder().encode(snapshot)
         let decoded = try AdaptedPostboxDecoder().decode(DraftPocketSnapshot.self, from: encoded)
@@ -260,6 +262,15 @@ final class DraftPocketTests: XCTestCase {
         for malformed in [Data([0xff, 0, 0x7f]), Data(contentData.dropLast())] {
             XCTAssertThrowsError(try AdaptedPostboxDecoder(validateData: true).decode(DraftPocketSnapshot.self, from: encoded(content: malformed, state: stateData, emojiFiles: emojiFiles)))
             XCTAssertThrowsError(try AdaptedPostboxDecoder(validateData: true).decode(DraftPocketSnapshot.self, from: encoded(content: contentData, state: malformed, emojiFiles: emojiFiles)))
+        }
+        let validOpaque = try XCTUnwrap(self.opaque("nested").opaqueData)
+        for malformed in [Data([0xff, 0, 0x7f]), Data(validOpaque.dropLast()), Data([1, 0x61, 10, 0xff, 0xff, 0xff, 0xff])] {
+            let badState = OpaqueChatInterfaceState(opaqueData: malformed, historyScrollMessageIndex: nil, mediaDraftState: nil, synchronizeableInputState: nil)
+            // Reject before preparing a transfer, and reject the same corruption
+            // when the outer card and InternalChatInterfaceState are well framed.
+            XCTAssertThrowsError(try DraftPocketSnapshot(content: content, selection: selection.value, state: badState))
+            let badStateData = try draftPocketActiveStateToken(badState)
+            XCTAssertThrowsError(try AdaptedPostboxDecoder(validateData: true).decode(DraftPocketSnapshot.self, from: encoded(content: contentData, state: badStateData, emojiFiles: emojiFiles)))
         }
         let badEmoji = PostboxEncoder()
         badEmoji.encodeDataArray([Data([0xff, 0, 0x7f])], forKey: "files")

@@ -26,14 +26,33 @@ extension ChatControllerImpl {
 
     /// Read the exact account's store. A pocket observation never silently adopts another
     /// controller's active-state token: doing so would turn a stale editor into a writer.
-    func refreshDraftPocketCount() {
-        guard self.isNodeLoaded, let peerId = self.chatLocation.peerId,
+    func refreshDraftPocketCount(preservingTransferredComposer: Bool = false) {
+        guard self.isNodeLoaded else { return }
+        if self.draftPocketScope.update(peerId: self.chatLocation.peerId, threadId: self.chatLocation.threadId) {
+            // Normal navigation creates a new composer visit, even if the body is
+            // equal. Explicit forum-send routing keeps the same captured draft.
+            if !preservingTransferredComposer { self.draftPocketComposerGeneration &+= 1 }
+            self.draftPocketObservation.set(nil)
+            self.draftPocketView = nil
+            self.draftPocketHasActiveToken = false
+            self.draftPocketExpectedActiveToken = nil
+            self.draftPocketOperationInProgress = false
+            self.chatDisplayNode.textInputPanelNode?.setDraftPocketInteractionLocked(false)
+            self.chatDisplayNode.textInputPanelNode?.cancelDraftPocketTransfer()
+            // A sheet belongs to the old scope, including its pending Undo callbacks.
+            let controller = self.draftPocketController
+            self.draftPocketController = nil
+            controller?.dismiss()
+            self.updateDraftPocketPresentation()
+        }
+        guard let peerId = self.chatLocation.peerId,
               peerId.namespace != Namespaces.Peer.SecretChat else { return }
         let threadId = self.chatLocation.threadId
+        let scope = self.draftPocketScope.token
         DraftPocketControllerRegistry.register(self)
         self.draftPocketObservation.set((self.context.engine.peers.observeDraftPocket(peerId: peerId, threadId: threadId)
         |> deliverOnMainQueue).start(next: { [weak self] view in
-            guard let self, self.chatLocation.peerId == peerId, self.chatLocation.threadId == threadId else { return }
+            guard let self, self.draftPocketScope.matches(scope) else { return }
             if !self.draftPocketHasActiveToken {
                 self.draftPocketExpectedActiveToken = view.activeStateToken
                 self.draftPocketHasActiveToken = true
@@ -43,15 +62,32 @@ extension ChatControllerImpl {
         }))
     }
 
-    private var draftPocketSupported: Bool {
+    fileprivate var draftPocketSupported: Bool {
         guard let peerId = self.chatLocation.peerId, peerId.namespace != Namespaces.Peer.SecretChat,
+              self.chatLocation.threadId != EngineMessage.newTopicThreadId,
+              !self.isUpdatingChatLocationThread,
               self.subject?.isService != true,
               self.presentationInterfaceState.interfaceState.editMessage == nil,
               self.presentationInterfaceState.interfaceState.forwardMessageIds == nil,
               self.presentationInterfaceState.interfaceState.mediaDraftState == nil,
               self.presentationInterfaceState.interfaceState.postSuggestionState == nil,
               self.audioRecorderValue == nil, self.videoRecorderValue == nil,
-              !self.draftPocketHasDraft || self.chatDisplayNode.textInputPanelNode?.richTextInputNode?.supportsExactInputSelection != false,
+              !self.draftPocketHasDraft || self.chatDisplayNode.textInputPanelNode?.richTextInputNode?.supportsExactInputSelection != false else { return false }
+        return true
+    }
+
+    private var draftPocketUnsupportedNotice: String {
+        let strings = DraftPocketStrings(self.presentationData.strings)
+        return self.chatLocation.threadId == EngineMessage.newTopicThreadId ? strings.finishTopic : strings.unsupported
+    }
+
+    fileprivate var draftPocketHasWritableComposer: Bool {
+        // The upstream panel selector also handles closed topics, inaccessible
+        // chats, account restrictions and membership; a cached text node alone
+        // does not imply that its composer is currently available for writing.
+        guard let panel = self.chatDisplayNode.textInputPanelNode,
+              self.chatDisplayNode.inputPanelNode === panel,
+              !self.presentationInterfaceState.isNotAccessible,
               canSendMessagesToChat(self.presentationInterfaceState) else { return false }
         return true
     }
@@ -63,19 +99,19 @@ extension ChatControllerImpl {
 
     private func updateDraftPocketPresentation() {
         self.chatDisplayNode.textInputPanelNode?.draftPocketCount = (self.draftPocketView?.items.count ?? 0) + (self.draftPocketView?.pendingSends.count ?? 0)
-        self.draftPocketController?.update(items: self.draftPocketView?.items ?? [], deletedItems: self.draftPocketView?.deletedItems ?? [], pendingSends: self.draftPocketView?.pendingSends ?? [], error: self.draftPocketView?.error, canPutAside: self.draftPocketSupported && self.draftPocketHasDraft, busy: self.draftPocketOperationInProgress || self.draftPocketView == nil, mediaRecoveryUnavailable: self.draftPocketView?.mediaRecoveryUnavailable ?? false)
+        self.draftPocketController?.update(items: self.draftPocketView?.items ?? [], deletedItems: self.draftPocketView?.deletedItems ?? [], pendingSends: self.draftPocketView?.pendingSends ?? [], error: self.draftPocketView?.error, canPutAside: self.draftPocketSupported && self.draftPocketHasWritableComposer && self.draftPocketHasDraft, busy: self.draftPocketOperationInProgress || self.draftPocketView == nil, mediaRecoveryUnavailable: self.draftPocketView?.mediaRecoveryUnavailable ?? false)
     }
 
     func openDraftPocket() {
         guard self.draftPocketController == nil, !self.draftPocketOperationInProgress else { return }
         guard self.draftPocketSupported,
               self.chatDisplayNode.textInputPanelNode?.draftPocketHasMarkedText != true else {
-            self.draftPocketNotice(DraftPocketStrings(self.presentationData.strings).unsupported)
+            self.draftPocketNotice(self.draftPocketUnsupportedNotice)
             return
         }
         let wasFocused = self.chatDisplayNode.textInputPanelNode?.isFocused ?? false
         // Read-back before presenting commits the editor's structural selection to the host mirror.
-        if let panel = self.chatDisplayNode.textInputPanelNode {
+        if self.draftPocketHasWritableComposer, let panel = self.chatDisplayNode.textInputPanelNode {
             let input = panel.inputTextState
             self.updateChatPresentationInterfaceState(animated: false, interactive: false, { state in
                 state.updatedInterfaceState { $0.withUpdatedComposeInputState(input).withUpdatedInputLanguage(panel.effectiveInputLanguage) }
@@ -92,7 +128,7 @@ extension ChatControllerImpl {
         controller.closed = { [weak self, weak controller] in
             guard let self, self.draftPocketController === controller else { return }
             self.draftPocketController = nil
-            if wasFocused && !self.draftPocketOperationInProgress && self.traceVisibility() { self.chatDisplayNode.textInputPanelNode?.ensureFocused() }
+            if wasFocused && !self.draftPocketOperationInProgress && self.draftPocketHasWritableComposer && self.traceVisibility() { self.chatDisplayNode.textInputPanelNode?.ensureFocused() }
         }
         self.updateDraftPocketPresentation()
         self.present(controller, in: .window(.root))
@@ -105,17 +141,24 @@ extension ChatControllerImpl {
     private func transferDraftPocket(restoring id: String?, activeChecked: Bool = false, replyChecked: Bool = false, replyAvailable: Bool = true) {
         guard !self.draftPocketOperationInProgress, self.draftPocketSupported,
               let peerId = self.chatLocation.peerId, let view = self.draftPocketView,
-              view.error == nil, self.draftPocketHasActiveToken,
-              let panel = self.chatDisplayNode.textInputPanelNode,
-              !panel.draftPocketHasMarkedText else {
+              view.error == nil, self.draftPocketHasActiveToken else {
+            self.draftPocketNotice(self.draftPocketUnsupportedNotice)
+            return
+        }
+        guard self.draftPocketHasWritableComposer, let panel = self.chatDisplayNode.textInputPanelNode else {
+            self.draftPocketNotice(DraftPocketStrings(self.presentationData.strings).writingUnavailable)
+            return
+        }
+        guard !panel.draftPocketHasMarkedText else {
             self.draftPocketNotice(DraftPocketStrings(self.presentationData.strings).unsupported)
             return
         }
         if !activeChecked {
             let threadId = self.chatLocation.threadId
+            let scope = self.draftPocketScope.token
             let _ = (self.context.engine.peers.getOpaqueChatInterfaceState(peerId: peerId, threadId: threadId)
             |> deliverOnMainQueue).startStandalone(next: { [weak self] stored in
-                guard let self, self.chatLocation.peerId == peerId, self.chatLocation.threadId == threadId,
+                guard let self, self.draftPocketScope.matches(scope),
                       !self.draftPocketOperationInProgress else { return }
                 let token: Data?
                 do { token = try stored.map(draftPocketActiveStateToken) } catch {
@@ -143,13 +186,16 @@ extension ChatControllerImpl {
         }
         if let id, !replyChecked, let item = view.items.first(where: { $0.id == id }),
            let opaque = try? item.snapshot.interfaceState(), let reply = opaque.synchronizeableInputState?.replySubject {
+            let scope = self.draftPocketScope.token
             let _ = (self.context.engine.data.get(TelegramEngine.EngineData.Item.Messages.Message(id: reply.messageId))
             |> deliverOnMainQueue).startStandalone(next: { [weak self] message in
-                self?.transferDraftPocket(restoring: id, activeChecked: true, replyChecked: true, replyAvailable: message != nil)
+                guard let self, self.draftPocketScope.matches(scope) else { return }
+                self.transferDraftPocket(restoring: id, activeChecked: true, replyChecked: true, replyAvailable: message != nil)
             })
             return
         }
         let threadId = self.chatLocation.threadId
+        let scope = self.draftPocketScope.token
         let liveInput = panel.inputTextState
         let captured = self.presentationInterfaceState.interfaceState
             .withUpdatedComposeInputState(liveInput)
@@ -172,7 +218,7 @@ extension ChatControllerImpl {
                 }
                 let stored = try item.snapshot.interfaceState()
                 guard let data = stored.opaqueData else { throw DraftPocketError.corruptStorage }
-                let restored = try EngineDecoder.decode(ChatInterfaceState.self, from: data)
+                let restored = try EngineDecoder.decodeValidated(ChatInterfaceState.self, from: data)
                 var restoredInput = ChatTextInputState(content: item.snapshot.resolvedContent, selectionRange: 0 ..< 0)
                 restoredInput.selection = item.snapshot.selection
                 // Composer fields travel; scroll position, selection mode and unrelated chat state do not.
@@ -203,24 +249,21 @@ extension ChatControllerImpl {
         // Keep the account/store alive until its transaction finishes, even if the controller leaves.
         let _ = (self.context.engine.peers.updateDraftPocket(peerId: peerId, threadId: threadId, expectedRevision: view.revision, expectedActiveState: self.draftPocketExpectedActiveToken, operation: operation)
         |> deliverOnMainQueue).startStandalone(next: { [weak self, weak panel] result in
-            guard let self else {
-                DraftPocketControllerRegistry.unlock(participants)
-                return
-            }
             switch result {
             case let .failure(error):
-                panel?.cancelDraftPocketTransfer()
+                if let self, self.draftPocketScope.matches(scope) {
+                    panel?.cancelDraftPocketTransfer()
+                    self.draftPocketReport(error)
+                }
                 DraftPocketControllerRegistry.unlock(participants)
-                self.draftPocketReport(error)
             case let .success(updatedView):
-                self.draftPocketExpectedActiveToken = updatedView.activeStateToken
-                self.draftPocketHasActiveToken = true
-                self.draftPocketView = updatedView
-                for participant in participants {
+                // Apply only to participants from the captured visit. A stale result
+                // must never replace a subsequently loaded composer or pocket view.
+                for locked in participants where locked.isCurrent {
+                    let participant = locked.controller
                     participant.draftPocketExpectedActiveToken = updatedView.activeStateToken
                     participant.draftPocketHasActiveToken = true
                     participant.draftPocketView = updatedView
-                    guard participant.chatLocation.peerId == peerId, participant.chatLocation.threadId == threadId else { continue }
                     // Invalidate delayed sends even when a restored card is byte-for-byte equal.
                     participant.draftPocketComposerGeneration &+= 1
                     participant.updateChatPresentationInterfaceState(animated: !UIAccessibility.isReduceMotionEnabled, interactive: true, { state in
@@ -238,9 +281,16 @@ extension ChatControllerImpl {
                         nextState.composeInputState.content, selection: nextState.composeInputState.selection)
                 }
                 DraftPocketControllerRegistry.unlock(participants)
+                guard let self, self.draftPocketScope.matches(scope) else { return }
                 let animateTransfer = { [weak self, weak panel] in
-                    guard let self, self.traceVisibility(), self.chatLocation.peerId == peerId, self.chatLocation.threadId == threadId else {
+                    guard let self, self.draftPocketScope.matches(scope) else { return }
+                    guard self.traceVisibility() else {
                         panel?.cancelDraftPocketTransfer()
+                        return
+                    }
+                    guard self.draftPocketHasWritableComposer else {
+                        panel?.cancelDraftPocketTransfer()
+                        self.draftPocketNotice(DraftPocketStrings(self.presentationData.strings).writingUnavailable)
                         return
                     }
                     panel?.animateDraftPocketTransfer(restoring: id != nil)
@@ -253,22 +303,22 @@ extension ChatControllerImpl {
                     animateTransfer()
                 }
             }
-            self.updateDraftPocketPresentation()
+            if let self, self.draftPocketScope.matches(scope) { self.updateDraftPocketPresentation() }
         })
     }
 
     private func recoverDraftPocketSend(_ id: String) {
-        guard !self.draftPocketOperationInProgress, let view = self.draftPocketView,
+        guard !self.draftPocketOperationInProgress, !self.isUpdatingChatLocationThread,
+              self.chatLocation.threadId != EngineMessage.newTopicThreadId, let view = self.draftPocketView,
               view.error == nil, view.pendingSends.contains(where: { $0.id == id }),
-              let peerId = self.chatLocation.peerId else { return }
-        let threadId = self.chatLocation.threadId
+              self.chatLocation.peerId != nil else { return }
+        let scope = self.draftPocketScope.token
         self.draftPocketOperationInProgress = true
         self.updateDraftPocketPresentation()
         let _ = (self.context.engine.peers.recoverDraftPocketSend(operationId: id, expectedRevision: view.revision)
         |> deliverOnMainQueue).startStandalone(next: { [weak self] result in
-            guard let self else { return }
+            guard let self, self.draftPocketScope.matches(scope) else { return }
             self.draftPocketOperationInProgress = false
-            guard self.chatLocation.peerId == peerId, self.chatLocation.threadId == threadId else { return }
             switch result {
             case let .success(view): self.draftPocketView = view
             case let .failure(error): self.draftPocketReport(error)
@@ -278,10 +328,11 @@ extension ChatControllerImpl {
     }
 
     private func deleteDraftPocketItem(_ id: String) {
+        let scope = self.draftPocketScope.token
         self.mutateDraftPocket(.delete(id: id)) { [weak self] in
             guard let self else { return }
             self.present(UndoOverlayController(presentationData: self.presentationData, content: .removedChat(context: self.context, title: NSAttributedString(string: DraftPocketStrings(self.presentationData.strings).deleted), text: nil), elevatedLayout: false, action: { [weak self] action in
-                guard let self else { return false }
+                guard let self, self.draftPocketScope.matches(scope) else { return false }
                 if action == .undo {
                     self.mutateDraftPocket(.undoDelete(id: id)) {}
                     return true
@@ -295,7 +346,8 @@ extension ChatControllerImpl {
     }
 
     private func mutateDraftPocket(_ operation: DraftPocketOperation, completion: @escaping () -> Void) {
-        guard !self.draftPocketOperationInProgress, let view = self.draftPocketView, view.error == nil,
+        guard !self.draftPocketOperationInProgress, !self.isUpdatingChatLocationThread,
+              self.chatLocation.threadId != EngineMessage.newTopicThreadId, let view = self.draftPocketView, view.error == nil,
               let peerId = self.chatLocation.peerId else { return }
         // A persisted recovery row and the transient Undo overlay can both resolve the
         // same deletion. A late overlay callback must not report a spurious failure.
@@ -306,13 +358,13 @@ extension ChatControllerImpl {
             break
         }
         let threadId = self.chatLocation.threadId
+        let scope = self.draftPocketScope.token
         self.draftPocketOperationInProgress = true
         self.updateDraftPocketPresentation()
         let _ = (self.context.engine.peers.updateDraftPocket(peerId: peerId, threadId: threadId, expectedRevision: view.revision, expectedActiveState: view.activeStateToken, operation: operation)
         |> deliverOnMainQueue).startStandalone(next: { [weak self] result in
-            guard let self else { return }
+            guard let self, self.draftPocketScope.matches(scope) else { return }
             self.draftPocketOperationInProgress = false
-            guard self.chatLocation.peerId == peerId, self.chatLocation.threadId == threadId else { return }
             switch result {
             case let .success(view): self.draftPocketView = view; completion()
             case let .failure(error): self.draftPocketReport(error)
@@ -340,6 +392,13 @@ extension ChatControllerImpl {
 /// A second window must not later save the pre-transfer composer over the committed result.
 /// This registry contains no draft storage; Postbox remains the only durable source of truth.
 private enum DraftPocketControllerRegistry {
+    struct LockedController {
+        let controller: ChatControllerImpl
+        let scope: ChatInputScopeTracker.Token?
+
+        var isCurrent: Bool { self.controller.draftPocketScope.matches(self.scope) }
+    }
+
     private final class WeakController {
         weak var value: ChatControllerImpl?
         init(_ value: ChatControllerImpl) { self.value = value }
@@ -354,7 +413,7 @@ private enum DraftPocketControllerRegistry {
         }
     }
 
-    static func lock(_ owner: ChatControllerImpl, captured: ChatInterfaceState, restoring inputToRestore: ChatTextInputState) -> [ChatControllerImpl]? {
+    static func lock(_ owner: ChatControllerImpl, captured: ChatInterfaceState, restoring inputToRestore: ChatTextInputState) -> [LockedController]? {
         assert(Thread.isMainThread)
         self.register(owner)
         let participants = self.controllers.compactMap { $0.value }.filter {
@@ -362,25 +421,25 @@ private enum DraftPocketControllerRegistry {
         }
         for controller in participants {
             let state = controller.presentationInterfaceState.interfaceState
-            let input = controller.chatDisplayNode.textInputPanelNode?.inputTextState ?? state.composeInputState
+            let panel = controller.chatDisplayNode.textInputPanelNode
+            let input = panel?.inputTextState ?? state.composeInputState
             guard !controller.draftPocketOperationInProgress,
+                  controller.draftPocketSupported, controller.draftPocketHasWritableComposer,
                   controller.chatDisplayNode.textInputPanelNode?.draftPocketHasMarkedText != true,
                   (input.isEmpty && state.replyMessageSubject == nil) || controller.chatDisplayNode.textInputPanelNode?.richTextInputNode?.supportsExactInputSelection != false,
                   controller.chatDisplayNode.textInputPanelNode?.richTextInputNode?.canRestoreInputSelection(inputToRestore.selection, in: inputToRestore.content) != false,
-                  state.editMessage == nil, state.mediaDraftState == nil,
-                  input == captured.composeInputState,
-                  state.replyMessageSubject == captured.replyMessageSubject,
-                  state.composeDisableUrlPreviews == captured.composeDisableUrlPreviews else { return nil }
+                  state.matchesDraftPocketComposer(captured, input: input, effectiveInputLanguage: panel?.effectiveInputLanguage) else { return nil }
         }
         for controller in participants {
             controller.draftPocketOperationInProgress = true
             controller.chatDisplayNode.textInputPanelNode?.setDraftPocketInteractionLocked(true)
         }
-        return participants
+        return participants.map { LockedController(controller: $0, scope: $0.draftPocketScope.token) }
     }
 
-    static func unlock(_ participants: [ChatControllerImpl]) {
-        for controller in participants {
+    static func unlock(_ participants: [LockedController]) {
+        for locked in participants where locked.isCurrent {
+            let controller = locked.controller
             controller.draftPocketOperationInProgress = false
             controller.chatDisplayNode.textInputPanelNode?.setDraftPocketInteractionLocked(false)
         }

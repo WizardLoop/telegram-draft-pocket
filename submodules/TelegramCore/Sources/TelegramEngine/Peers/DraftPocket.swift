@@ -104,7 +104,16 @@ public struct DraftPocketSnapshot: Codable {
 
     public var selection: ChatInputSelection { self.storedSelection.value }
 
+    private static func validateOpaqueData(_ data: Data?) throws {
+        // This UI-owned Postbox record is stored inside a Data field, so the
+        // enclosing InternalChatInterfaceState framing scan cannot inspect it.
+        if let data, !PostboxDecoder.isWellFormedData(data) {
+            throw DraftPocketError.corruptStorage
+        }
+    }
+
     public init(content: ChatInputContent, selection: ChatInputSelection, state: OpaqueChatInterfaceState) throws {
+        try Self.validateOpaqueData(state.opaqueData)
         self.content = content
         self.storedSelection = DraftPocketSelection(selection)
         self.storedInterfaceState = try AdaptedPostboxEncoder().encode(InternalChatInterfaceState(
@@ -128,7 +137,8 @@ public struct DraftPocketSnapshot: Codable {
         self.storedSelection = try container.decode(DraftPocketSelection.self, forKey: .selection)
         self.storedInterfaceState = try container.decode(Data.self, forKey: .interfaceState)
         self.emojiFiles = try container.decode(DraftPocketEmojiFiles.self, forKey: .emojiFiles)
-        _ = try AdaptedPostboxDecoder(validateData: true).decode(InternalChatInterfaceState.self, from: self.storedInterfaceState)
+        let state = try AdaptedPostboxDecoder(validateData: true).decode(InternalChatInterfaceState.self, from: self.storedInterfaceState)
+        try Self.validateOpaqueData(state.opaqueData)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -141,6 +151,7 @@ public struct DraftPocketSnapshot: Codable {
 
     public func interfaceState() throws -> OpaqueChatInterfaceState {
         let state = try AdaptedPostboxDecoder(validateData: true).decode(InternalChatInterfaceState.self, from: self.storedInterfaceState)
+        try Self.validateOpaqueData(state.opaqueData)
         return OpaqueChatInterfaceState(opaqueData: state.opaqueData, historyScrollMessageIndex: state.historyScrollMessageIndex, mediaDraftState: state.mediaDraftState, synchronizeableInputState: state.synchronizeableInputState)
     }
 

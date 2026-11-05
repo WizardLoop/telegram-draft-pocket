@@ -2,7 +2,7 @@
 
 Put an unfinished Telegram iOS message aside, answer a quick question, and return to the draft.
 
-**Implementation draft.** The full app and UI test target compile on macOS; three native test targets passed. The latest attempt exposed a corrupt-storage decoding crash, a harness startup timeout and a recorder startup failure. No recording exists yet. The source is on [`feature/draft-pocket`](https://github.com/WizardLoop/telegram-draft-pocket/tree/feature/draft-pocket) in [Draft PR #1](https://github.com/WizardLoop/telegram-draft-pocket/pull/1), pending review into `main`.
+**Implementation draft.** The last completed macOS attempt built the full app and UI test target; three native test targets passed. It exposed a corrupt-storage decoding crash, a harness startup timeout and a recorder startup failure. The corrected source needs native validation, and no recording exists yet. The source is on [`feature/draft-pocket`](https://github.com/WizardLoop/telegram-draft-pocket/tree/feature/draft-pocket) in [Draft PR #1](https://github.com/WizardLoop/telegram-draft-pocket/pull/1), pending review into `main`.
 
 ## Demo
 

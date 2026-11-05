@@ -61,7 +61,9 @@ final class DraftPocketMediaLifecycleTests: XCTestCase {
 
     private func opaque(_ text: String) -> OpaqueChatInterfaceState {
         let sync = text.isEmpty ? nil : SynchronizeableChatInputState(replySubject: nil, text: text, entities: [], timestamp: 1000, textSelection: nil, messageEffectId: nil, suggestedPost: nil)
-        return OpaqueChatInterfaceState(opaqueData: Data(text.utf8), historyScrollMessageIndex: nil, mediaDraftState: nil, synchronizeableInputState: sync)
+        let encoder = PostboxEncoder()
+        encoder.encodeString(text, forKey: "fixtureText")
+        return OpaqueChatInterfaceState(opaqueData: encoder.makeData(), historyScrollMessageIndex: nil, mediaDraftState: nil, synchronizeableInputState: sync)
     }
 
     private func snapshot(_ text: String) throws -> DraftPocketSnapshot {

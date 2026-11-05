@@ -32,6 +32,8 @@ public struct DraftPocketStrings {
     public var structured: String { self.value("Structured", "Rich content", "תוכן עשיר") }
     public var deleted: String { self.value("Deleted", "Draft deleted", "הטיוטה נמחקה") }
     public var unsupported: String { self.value("Unsupported", "Finish the current action before using Draft Pocket.", "יש לסיים את הפעולה הנוכחית לפני השימוש בכיס הטיוטות.") }
+    public var writingUnavailable: String { self.value("WritingUnavailable", "Writing is unavailable in this chat or topic. Your drafts have been kept.", "לא ניתן לכתוב בצ׳אט או בנושא הזה כרגע. הטיוטות שלך נשמרו.") }
+    public var finishTopic: String { self.value("FinishTopic", "Create or open a topic before using Draft Pocket. Your draft has not changed.", "יש ליצור נושא או לפתוח נושא קיים לפני השימוש בכיס הטיוטות. הטיוטה שלך לא השתנתה.") }
     public var failed: String { self.value("Failed", "The draft could not be moved. Your content has been kept.", "לא ניתן להעביר את הטיוטה. התוכן שלך נשמר.") }
     public var changed: String { self.value("Changed", "The draft changed. Please try again.", "הטיוטה השתנתה. אפשר לנסות שוב.") }
     public var full: String { self.value("Full", "This pocket has 20 drafts. Restore or delete one first.", "בכיס הזה יש 20 טיוטות. יש להחזיר לכתיבה או למחוק אחת מהן.") }

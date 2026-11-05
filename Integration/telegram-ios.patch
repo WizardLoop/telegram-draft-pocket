@@ -1429,6 +1429,21 @@ index 7cfe8c208fa36a82ee67bd8b00fcec8fb02611c5..1260c2692633d8f861452375588f8ecc
          }
          
          public func getPerstistentChatInterfaceState(peerId: EnginePeer.Id) -> Signal<CodableEntry?, NoError> {
+diff --git a/submodules/TelegramCore/Sources/Utils/Coding.swift b/submodules/TelegramCore/Sources/Utils/Coding.swift
+index e6770f323f75b7f971c7e495c2c8603d0bf82b2b..e5b1bcbebe97f5a924c1cf898d96edab17a6d359 100644
+--- a/submodules/TelegramCore/Sources/Utils/Coding.swift
++++ b/submodules/TelegramCore/Sources/Utils/Coding.swift
+@@ -11,4 +11,10 @@ public final class EngineDecoder {
+     public static func decode<T>(_ type: T.Type, from data: Data) throws -> T where T : Decodable {
+         return try AdaptedPostboxDecoder().decode(type, from: data)
+     }
++
++    /// Opt-in for locally owned recovery records. Ordinary state decoding keeps
++    /// its existing behavior and does not pay for a framing validation pass.
++    public static func decodeValidated<T>(_ type: T.Type, from data: Data) throws -> T where T : Decodable {
++        return try AdaptedPostboxDecoder(validateData: true).decode(type, from: data)
++    }
+ }
 diff --git a/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/ChatRichTextInputNode.swift b/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/ChatRichTextInputNode.swift
 index 87f1a5429faed2a539061708ec86b9ec3d389301..ded215336b36c82af6d56905aebea77f55872b23 100644
 --- a/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/ChatRichTextInputNode.swift
@@ -1850,14 +1865,15 @@ index 1f8b01ee472b353933b8a478fd96333fbbaa647d..354d8eb687c838597b12643dc4b648e2
      var isEditorFirstResponder: Bool { get }
      func resignEditorFirstResponder() -> Bool
 diff --git a/submodules/TelegramUI/Sources/ChatController.swift b/submodules/TelegramUI/Sources/ChatController.swift
-index 5fe58bbf51f3e27c0c06f453b59938c97fc6faa7..27940ba8c9d16c8cdcf201d9f2cec2877e35c4aa 100644
+index 5fe58bbf51f3e27c0c06f453b59938c97fc6faa7..fbe0a334562c01df475d5ff12edb79064d80409f 100644
 --- a/submodules/TelegramUI/Sources/ChatController.swift
 +++ b/submodules/TelegramUI/Sources/ChatController.swift
-@@ -267,6 +267,13 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+@@ -267,6 +267,14 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
      var contentData: ChatControllerImpl.ContentData?
      let contentDataReady = ValuePromise<Bool>(false, ignoreRepeated: true)
      var contentDataDisposable: Disposable?
 +    var draftPocketOperationInProgress = false
++    var draftPocketScope = ChatInputScopeTracker()
 +    var draftPocketComposerGeneration: UInt64 = 0
 +    var draftPocketHasActiveToken = false
 +    var draftPocketExpectedActiveToken: Data?
@@ -1867,7 +1883,7 @@ index 5fe58bbf51f3e27c0c06f453b59938c97fc6faa7..27940ba8c9d16c8cdcf201d9f2cec287
      var newTopicEventsDisposable: Disposable?
      var didHandlePerformDismissAction: Bool = false
      var didInitializePersistentPeerInterfaceData: Bool = false
-@@ -2408,6 +2415,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+@@ -2408,6 +2416,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
                  }
              }
              
@@ -1875,7 +1891,7 @@ index 5fe58bbf51f3e27c0c06f453b59938c97fc6faa7..27940ba8c9d16c8cdcf201d9f2cec287
              var attributes: [MessageAttribute] = []
              if let query = query {
                  attributes.append(EmojiSearchQueryMessageAttribute(query: query))
-@@ -2483,6 +2491,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+@@ -2483,6 +2492,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
                  if silentPosting {
                      strongSelf.chatDisplayNode.setupSendActionOnViewUpdate({
                          if let strongSelf = self {
@@ -1883,7 +1899,7 @@ index 5fe58bbf51f3e27c0c06f453b59938c97fc6faa7..27940ba8c9d16c8cdcf201d9f2cec287
                              strongSelf.chatDisplayNode.collapseInput()
                              
                              strongSelf.updateChatPresentationInterfaceState(animated: true, interactive: false, { current in
-@@ -2512,6 +2521,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+@@ -2512,6 +2522,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
                  } else if schedule {
                      strongSelf.chatDisplayNode.setupSendActionOnViewUpdate({
                          if let strongSelf = self {
@@ -1891,7 +1907,7 @@ index 5fe58bbf51f3e27c0c06f453b59938c97fc6faa7..27940ba8c9d16c8cdcf201d9f2cec287
                              strongSelf.chatDisplayNode.collapseInput()
                              
                              strongSelf.updateChatPresentationInterfaceState(animated: true, interactive: false, { current in
-@@ -2580,8 +2590,10 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+@@ -2580,8 +2591,10 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
                              }
                          }
  
@@ -1902,7 +1918,21 @@ index 5fe58bbf51f3e27c0c06f453b59938c97fc6faa7..27940ba8c9d16c8cdcf201d9f2cec287
                                  strongSelf.chatDisplayNode.collapseInput()
  
                                  strongSelf.updateChatPresentationInterfaceState(animated: true, interactive: false, { current in
-@@ -3515,6 +3527,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+@@ -2611,9 +2624,11 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+                     }
+                     
+                     if let targetThreadId {
+-                        strongSelf.chatDisplayNode.historyNode.stopHistoryUpdates()
++                        let routingPeerId = strongSelf.chatLocation.peerId
+                         strongSelf.updateChatLocationThread(threadId: targetThreadId, animationDirection: .right, transferInputState: true, completion: { [weak strongSelf] in
+-                            guard let strongSelf else {
++                            guard let strongSelf, !strongSelf.draftPocketOperationInProgress, !strongSelf.isUpdatingChatLocationThread,
++                                  strongSelf.chatLocation.peerId == routingPeerId,
++                                  strongSelf.chatLocation.threadId == targetThreadId else {
+                                 return
+                             }
+                             doSend(targetThreadId)
+@@ -3515,6 +3530,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
                  if let messageId, Namespaces.Message.allEphemeral.contains(messageId.namespace) {
                      return
                  }
@@ -1910,7 +1940,7 @@ index 5fe58bbf51f3e27c0c06f453b59938c97fc6faa7..27940ba8c9d16c8cdcf201d9f2cec287
                  strongSelf.chatDisplayNode.setupSendActionOnViewUpdate({}, nil)
                  var postAsReply = false
                  if !command.contains("@") {
-@@ -3539,6 +3552,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+@@ -3539,6 +3555,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
                  
                  strongSelf.chatDisplayNode.setupSendActionOnViewUpdate({
                      if let strongSelf = self {
@@ -1918,7 +1948,7 @@ index 5fe58bbf51f3e27c0c06f453b59938c97fc6faa7..27940ba8c9d16c8cdcf201d9f2cec287
                          strongSelf.chatDisplayNode.collapseInput()
                          
                          strongSelf.updateChatPresentationInterfaceState(animated: true, interactive: false, {
-@@ -7082,6 +7096,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+@@ -7082,6 +7099,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
      }
  
      deinit {
@@ -1926,7 +1956,7 @@ index 5fe58bbf51f3e27c0c06f453b59938c97fc6faa7..27940ba8c9d16c8cdcf201d9f2cec287
          let _ = ChatControllerCount.modify { value in
              return value - 1
          }
-@@ -7686,6 +7701,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+@@ -7686,6 +7704,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
      
      override public func loadDisplayNode() {
          self.loadDisplayNodeImpl()
@@ -1934,7 +1964,7 @@ index 5fe58bbf51f3e27c0c06f453b59938c97fc6faa7..27940ba8c9d16c8cdcf201d9f2cec287
          self.galleryPresentationContext.view = self.view
          self.galleryPresentationContext.controllersUpdated = { [weak self] _ in
              guard let self else {
-@@ -8354,6 +8370,8 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+@@ -8354,6 +8373,8 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
      }
      
      func saveInterfaceState(includeScrollState: Bool = true) {
@@ -1943,7 +1973,7 @@ index 5fe58bbf51f3e27c0c06f453b59938c97fc6faa7..27940ba8c9d16c8cdcf201d9f2cec287
          if case .messageOptions = self.subject {
              return
          }
-@@ -8390,9 +8408,19 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+@@ -8390,9 +8411,23 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
              interfaceState = interfaceState.withUpdatedHistoryScrollState(scrollState)
          }
          interfaceState = interfaceState.withUpdatedInputLanguage(self.chatDisplayNode.currentTextInputLanguage)
@@ -1953,10 +1983,14 @@ index 5fe58bbf51f3e27c0c06f453b59938c97fc6faa7..27940ba8c9d16c8cdcf201d9f2cec287
 +        if interfaceState.mediaDraftState == nil, let opaqueData = try? EngineEncoder.encode(interfaceState) {
 +            let opaqueState = OpaqueChatInterfaceState(opaqueData: opaqueData, historyScrollMessageIndex: interfaceState.historyScrollMessageIndex, mediaDraftState: nil, synchronizeableInputState: interfaceState.synchronizeableInputState)
 +            let expectedToken = try? draftPocketActiveStateToken(opaqueState)
++            let pocketScope = self.draftPocketScope.token
++            let composerGeneration = self.draftPocketComposerGeneration
 +            let _ = (self.context.engine.peers.setOpaqueChatInterfaceState(peerId: peerId, threadId: threadId, state: opaqueState, retainedDraftResourceIds: draftPocketRetainedResourceIds(in: interfaceState.composeInputState.content))
 +            |> deliverOnMainQueue).startStandalone(completed: { [weak self] in
-+                self?.draftPocketExpectedActiveToken = expectedToken
-+                self?.draftPocketHasActiveToken = true
++                guard let self, self.draftPocketScope.matches(pocketScope),
++                      self.draftPocketComposerGeneration == composerGeneration else { return }
++                self.draftPocketExpectedActiveToken = expectedToken
++                self.draftPocketHasActiveToken = true
 +            })
 +        } else {
 +            let _ = ChatInterfaceState.update(engine: self.context.engine, peerId: peerId, threadId: threadId, { _ in
@@ -1966,7 +2000,21 @@ index 5fe58bbf51f3e27c0c06f453b59938c97fc6faa7..27940ba8c9d16c8cdcf201d9f2cec287
          
          self.context.engine.peers.setPerstistentChatInterfaceState(peerId: peerId, state: CodableEntry(self.presentationInterfaceState.persistentData))
      }
-@@ -9526,6 +9554,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+@@ -9494,9 +9529,11 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+                 }
+                 
+                 if let targetThreadId {
+-                    strongSelf.chatDisplayNode.historyNode.stopHistoryUpdates()
++                    let routingPeerId = strongSelf.chatLocation.peerId
+                     strongSelf.updateChatLocationThread(threadId: targetThreadId, animationDirection: .right, transferInputState: true, completion: { [weak strongSelf] in
+-                        guard let strongSelf else {
++                        guard let strongSelf, !strongSelf.draftPocketOperationInProgress, !strongSelf.isUpdatingChatLocationThread,
++                              strongSelf.chatLocation.peerId == routingPeerId,
++                              strongSelf.chatLocation.threadId == targetThreadId else {
+                             return
+                         }
+                         doSend(targetThreadId)
+@@ -9526,6 +9563,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
              return
          }
          
@@ -1974,7 +2022,7 @@ index 5fe58bbf51f3e27c0c06f453b59938c97fc6faa7..27940ba8c9d16c8cdcf201d9f2cec287
          var isScheduledMessages = false
          if case .scheduledMessages = self.presentationInterfaceState.subject {
              isScheduledMessages = true
-@@ -9541,6 +9570,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+@@ -9541,6 +9579,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
              if self.context.engine.messages.enqueueOutgoingMessageWithChatContextResult(to: peerId, threadId: self.chatLocation.threadId, botId: results.botId, result: result, replyToMessageId: replyMessageSubject?.subjectModel, hideVia: hideVia, silentPosting: silentPosting, scheduleTime: scheduleTime, sendPaidMessageStars: sendPaidMessageStars, postpone: postpone) {
                  self.chatDisplayNode.setupSendActionOnViewUpdate({ [weak self] in
                      if let strongSelf = self {
@@ -1982,8 +2030,57 @@ index 5fe58bbf51f3e27c0c06f453b59938c97fc6faa7..27940ba8c9d16c8cdcf201d9f2cec287
                          strongSelf.chatDisplayNode.collapseInput()
                          
                          strongSelf.updateChatPresentationInterfaceState(animated: true, interactive: true, { state in
+@@ -11237,6 +11276,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+     var currentChatSwitchDirection: ChatControllerAnimateInnerChatSwitchDirection?
+     
+     func updateChatLocationToOther(chatLocation: ChatLocation) {
++        guard !self.draftPocketOperationInProgress else { return }
+         self.saveInterfaceState()
+         self.chatDisplayNode.dismissTextInput()
+         
+@@ -11256,6 +11296,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+             self.chatDisplayNode.prepareSwitchToChatLocation(chatLocation: chatLocation, historyNode: historyNode, animationDirection: nil)
+             
+             apply(self.didAppear ? .animated(duration: 0.4, curve: .spring) : .immediate)
++            self.refreshDraftPocketCount()
+             
+             self.currentChatSwitchDirection = nil
+             self.isUpdatingChatLocationThread = false
+@@ -11263,6 +11304,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+     }
+     
+     func updateInitialChatBotForumLocationThread(linkedForumId: EnginePeer.Id, threadId: Int64) {
++        guard !self.draftPocketOperationInProgress else { return }
+         if self.isUpdatingChatLocationThread {
+             assertionFailure()
+             return
+@@ -11303,6 +11345,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+             self.chatDisplayNode.prepareSwitchToChatLocation(chatLocation: updatedChatLocation, historyNode: historyNode, animationDirection: nil)
+ 
+             apply(.animated(duration: 0.4, curve: .spring))
++            self.refreshDraftPocketCount()
+             
+             self.currentChatSwitchDirection = nil
+             self.isUpdatingChatLocationThread = false
+@@ -11333,7 +11376,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+                 completion?()
+                 return
+             }
+-            if self.isUpdatingChatLocationThread {
++            if self.isUpdatingChatLocationThread || self.draftPocketOperationInProgress {
+                 completion?()
+                 return
+             }
+@@ -11440,6 +11483,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+                 self.chatDisplayNode.prepareSwitchToChatLocation(chatLocation: updatedChatLocation, historyNode: historyNode, animationDirection: animationDirection)
+                 
+                 apply(.animated(duration: transferInputState ? 0.3 : 0.4, curve: .spring))
++                self.refreshDraftPocketCount(preservingTransferredComposer: transferInputState)
+                 
+                 if let navigationSnapshot, let animationDirection {
+                     let mappedAnimationDirection: ChatTitleView.AnimateFromSnapshotDirection
 diff --git a/submodules/TelegramUI/Sources/ChatControllerNode.swift b/submodules/TelegramUI/Sources/ChatControllerNode.swift
-index ee5838449d59b1c0631b319620f5f900d8aba298..cc77d28c2e2a274854ed9454d818acb35bd7114d 100644
+index ee5838449d59b1c0631b319620f5f900d8aba298..137597567fd3edd810438888df20ff686525a876 100644
 --- a/submodules/TelegramUI/Sources/ChatControllerNode.swift
 +++ b/submodules/TelegramUI/Sources/ChatControllerNode.swift
 @@ -344,6 +344,8 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
@@ -2227,7 +2324,7 @@ index ee5838449d59b1c0631b319620f5f900d8aba298..cc77d28c2e2a274854ed9454d818acb3
                          self.collapseInput()
                          
                          self.ignoreUpdateHeight = true
-@@ -5506,21 +5664,25 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+@@ -5506,21 +5664,28 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
                      }
                  }
                  
@@ -2252,9 +2349,12 @@ index ee5838449d59b1c0631b319620f5f900d8aba298..cc77d28c2e2a274854ed9454d818acb3
 +                self.prepareDraftPocketMessageSend(effectivePresentationInterfaceState, inputClearGuard: inputClearGuard) { [weak self] retentionOperationId in
 +                    guard let self else { return }
 +                    if let targetThreadId {
-+                        self.historyNode.stopHistoryUpdates()
++                        let routingPeerId = self.chatLocation.peerId
 +                        self.controller?.updateChatLocationThread(threadId: targetThreadId, animationDirection: .right, transferInputState: true, completion: { [weak self] in
-+                            guard let self else { return }
++                            guard let self, self.controller?.draftPocketOperationInProgress == false,
++                                  self.controller?.isUpdatingChatLocationThread == false,
++                                  self.chatLocation.peerId == routingPeerId,
++                                  self.chatLocation.threadId == targetThreadId else { return }
 +                            sendPrepared(targetThreadId, retentionOperationId)
 +                            if clearMainThreadForward, let peerId {
 +                                let _ = ChatInterfaceState.update(engine: self.context.engine, peerId: peerId, threadId: nil, { current in

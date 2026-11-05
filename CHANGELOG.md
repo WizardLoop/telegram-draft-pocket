@@ -17,5 +17,9 @@
 - Run portable validation on the actual Mac before the full build; resolve the UI test's declared host artifact across Bazel configuration transitions and macOS filesystem aliases.
 - Repair the pinned composer harness's missing share-screen protocol method, discovered by the actual native build.
 - Reject malformed Pocket persistence before legacy decoder assertions, with opt-in framing/container checks and native corruption regressions.
+- Validate the separately embedded composer record before storing or restoring it; keep ordinary state decoding unchanged.
+- Rebind Pocket state on in-place topic changes, reject callbacks from earlier visits, and protect different effect/language choices in multiple windows.
+- Keep cards intact when the active composer becomes unavailable; refuse Pocket operations in an unsent new-topic placeholder.
 - Prebuild native targets, address an explicitly owned Simulator, bound and record startup/cleanup phases, and attempt capture before the independent native suite.
+- Allow up to 120 minutes for manually requested public-runner validation, retaining bounded Simulator startup timeouts.
 - Keep native runtime and capture results separate from source/packaging validation; refuse unsupported transfers before mutation.

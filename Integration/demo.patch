@@ -253,7 +253,7 @@ diff --git a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Source
 diff --git a/submodules/TelegramUI/Sources/ChatController.swift b/submodules/TelegramUI/Sources/ChatController.swift
 --- a/submodules/TelegramUI/Sources/ChatController.swift
 +++ b/submodules/TelegramUI/Sources/ChatController.swift
-@@ -8561,6 +8561,9 @@
+@@ -8568,6 +8568,9 @@
              f,
              completion: completion
          )
