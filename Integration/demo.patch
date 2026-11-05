@@ -1,0 +1,265 @@
+diff --git a/MODULE.bazel b/MODULE.bazel
+--- a/MODULE.bazel
++++ b/MODULE.bazel
+@@ -210,6 +210,15 @@
+     path = "./build-system/bazel-rules/rules_apple",
+ )
+ 
++# Optional Draft Pocket demo: retain explicitly attached XCTest screenshots.
++# Same transitive version selected by pinned rules_apple; no dependency upgrade.
++single_version_override(
++    module_name = "xctestrunner",
++    version = "0.2.16-20260212-4c6f493",
++    patches = ["//build-system:draft-pocket-xctestrunner.patch"],
++    patch_strip = 1,
++)
++
+ bazel_dep(name = "rules_swift", repo_name = "build_bazel_rules_swift")
+ local_path_override(
+     module_name = "rules_swift",
+diff --git a/build-system/BUILD b/build-system/BUILD
+--- a/build-system/BUILD
++++ b/build-system/BUILD
+@@ -22,4 +22,5 @@
+ 
+ exports_files([
+     "GenerateStrings/GenerateStrings.py",
++    "draft-pocket-xctestrunner.patch",
+ ])
+diff --git a/submodules/TelegramCore/Sources/Network/Network.swift b/submodules/TelegramCore/Sources/Network/Network.swift
+--- a/submodules/TelegramCore/Sources/Network/Network.swift
++++ b/submodules/TelegramCore/Sources/Network/Network.swift
+@@ -450,6 +450,7 @@
+ }
+ 
+ private func resolveNetworkEngine(accountId: AccountRecordId, context: MTContext, factory: NetworkEngineFactory?, settings: NetworkEngineSettings?, rustDisabledReason: String?, isAppExtension: Bool) -> NetworkEngine {
++    if DraftPocketDemo.isEnabled { return DraftPocketDemoNetworkEngine() }
+     let preferredEngine = settings?.engine ?? NetworkEngineSettings.defaultSettings.engine
+     guard let factory = factory else {
+         Logger.shared.log("Network", "Account \(accountId.int64): engine mtProtoKit (no factory, preferred \(preferredEngine.rawValue))")
+@@ -554,6 +555,9 @@
+                 apiEnvironment = apiEnvironment.withUpdatedSocksProxySettings(effectiveActiveServer.mtProxySettings)
+             }
+             
++            if DraftPocketDemo.isEnabled {
++                apiEnvironment = apiEnvironment.withUpdatedSocksProxySettings(draftPocketDemoLoopbackProxy)
++            }
+             apiEnvironment = apiEnvironment.withUpdatedNetworkSettings((networkSettings ?? NetworkSettings.defaultSettings).mtNetworkSettings)
+             apiEnvironment.accessHostOverride = networkSettings?.backupHostOverride
+             
+@@ -600,7 +604,7 @@
+ 
+             let baseTcpConnectionInterfaceFactory = context.makeTcpConnectionInterface
+             let isAppExtension = Bundle.main.bundlePath.hasSuffix(".appex")
+-            let initialActiveServer = proxySettings?.effectiveActiveServer
++            let initialActiveServer = DraftPocketDemo.isEnabled ? nil : proxySettings?.effectiveActiveServer
+             let initialWebProxyConfiguration = initialActiveServer?.webProxyConfiguration
+             WebProxyTransport.shared.apply(configuration: isAppExtension ? nil : initialWebProxyConfiguration)
+             if initialActiveServer?.isWebProxy == true {
+@@ -634,7 +638,7 @@
+             context.keychain = keychain
+             var wrappedAdditionalSource: MTSignal?
+             #if os(iOS)
+-            if #available(iOS 10.0, *), !supplementary, arguments.isICloudEnabled {
++            if #available(iOS 10.0, *), !supplementary, !DraftPocketDemo.isEnabled, arguments.isICloudEnabled {
+                 var cloudDataContextValue: CloudDataContext?
+                 if let value = cloudDataContext.with({ $0 }) {
+                     cloudDataContextValue = value
+@@ -658,7 +662,7 @@
+             }
+             #endif
+             
+-            if !supplementary {
++            if !supplementary && !DraftPocketDemo.isEnabled {
+                 context.setDiscoverBackupAddressListSignal(MTBackupAddressSignals.fetchBackupIps(testingEnvironment, currentContext: context, additionalSource: wrappedAdditionalSource, phoneNumber: phoneNumber, mainDatacenterId: datacenterId))
+                 let externalRequestVerificationStream = arguments.externalRequestVerificationStream
+                 context.setExternalRequestVerification({ nonce in
+@@ -1178,6 +1182,8 @@
+     }
+ 
+     func updateProxySettings(_ activeServer: ProxyServerSettings?) {
++        // The isolated fixture cannot switch to a real proxy or a WEB transport.
++        if DraftPocketDemo.isEnabled { return }
+         let webConfiguration = activeServer?.webProxyConfiguration
+         WebProxyTransport.shared.apply(configuration: self.isAppExtension ? nil : webConfiguration)
+         self.webProxyActive.set(activeServer?.isWebProxy == true)
+@@ -1253,6 +1259,7 @@
+ 
+     @discardableResult
+     public func switchEngine(to kind: NetworkEngineKind, reason: String) -> Bool {
++        if DraftPocketDemo.isEnabled { return false }
+         guard let switchingEngine = self.switchingEngine else {
+             return kind == self.engine.kind
+         }
+diff --git a/submodules/TelegramUI/Sources/AppDelegate.swift b/submodules/TelegramUI/Sources/AppDelegate.swift
+--- a/submodules/TelegramUI/Sources/AppDelegate.swift
++++ b/submodules/TelegramUI/Sources/AppDelegate.swift
+@@ -243,6 +243,8 @@
+ 
+ @objc(AppDelegate) class AppDelegate: UIResponder, UIApplicationDelegate, PKPushRegistryDelegate, UNUserNotificationCenterDelegate, URLSessionDelegate, URLSessionTaskDelegate {
+     @objc var window: UIWindow?
++    private let draftPocketDemoBootstrap = MetaDisposable()
++    private var draftPocketDemoDidOpen = false
+     var nativeWindow: (UIWindow & WindowHost)?
+     var mainWindow: Window1!
+     private var statusBarHost: ApplicationStatusBarHost?
+@@ -717,16 +719,20 @@
+         }
+         
+         let isUITest = CommandLine.arguments.contains("--ui-test")
++        let draftPocketDemoBasePath = DraftPocketDemo.isEnabled ? DraftPocketDemo.basePath(appGroupPath: appGroupUrl.path) : nil
++        if DraftPocketDemo.isEnabled, let marker = DraftPocketDemo.buildMarker { print(marker) }
+ 
+         let rootPath: String
+         if isUITest {
+             let testDataPath = appGroupUrl.path + "/telegram-ui-tests-data"
+             let _ = try? FileManager.default.removeItem(atPath: testDataPath)
+             rootPath = rootPathForBasePath(testDataPath)
++        } else if let draftPocketDemoBasePath {
++            rootPath = rootPathForBasePath(draftPocketDemoBasePath)
+         } else {
+             rootPath = rootPathForBasePath(appGroupUrl.path)
+         }
+-        if !isUITest {
++        if !isUITest && !DraftPocketDemo.isEnabled {
+             performAppGroupUpgrades(appGroupPath: appGroupUrl.path, rootPath: rootPath)
+         }
+         
+@@ -1063,7 +1069,7 @@
+         })
+         
+         let accountManager: AccountManager<TelegramAccountManagerTypes> = setupAccountManager(basePath: rootPath + "/accounts-metadata", isTemporary: false, isReadOnly: false, useCaches: true, removeDatabaseOnError: true, resetLocalSecrets: {
+-            try resetWalletLocalSecrets()
++            if !DraftPocketDemo.isEnabled { try resetWalletLocalSecrets() }
+         })
+         self.accountManager = accountManager
+ 
+@@ -1105,12 +1111,12 @@
+             return true
+         }
+ 
+-        let pushRegistry = PKPushRegistry(queue: .main)
+-        if #available(iOS 9.0, *) {
+-            pushRegistry.desiredPushTypes = Set([.voIP])
+-        }
+-        self.pushRegistry = pushRegistry
+-        pushRegistry.delegate = self
++        if !DraftPocketDemo.isEnabled {
++            let pushRegistry = PKPushRegistry(queue: .main)
++            if #available(iOS 9.0, *) { pushRegistry.desiredPushTypes = Set([.voIP]) }
++            self.pushRegistry = pushRegistry
++            pushRegistry.delegate = self
++        }
+ 
+         self.accountManagerState = extractAccountManagerState(records: accountManager._internalAccountRecordsSync())
+         let _ = (accountManager.accountRecords()
+@@ -1133,7 +1139,7 @@
+         |> mapToSignal { [self] accountManager, initialPresentationDataAndSettings -> Signal<(SharedApplicationContext, LoggingSettings), NoError> in
+             self.mainWindow?.hostView.containerView.backgroundColor =  initialPresentationDataAndSettings.presentationData.theme.chatList.backgroundColor
+             
+-            let legacyBasePath = appGroupUrl.path
++            let legacyBasePath = draftPocketDemoBasePath ?? appGroupUrl.path
+             
+             let presentationDataPromise = Promise<PresentationData>()
+             let appLockContext = AppLockContextImpl(rootPath: rootPath, window: self.mainWindow!, rootController: self.window?.rootViewController, applicationBindings: applicationBindings, accountManager: accountManager, presentationDataSignal: presentationDataPromise.get(), lockIconInitialFrame: {
+@@ -1161,7 +1167,7 @@
+                         self.mainWindow.coveringView = nil
+                     }
+                 }
+-            }, appDelegate: self, testingEnvironment: isUITest)
++            }, appDelegate: self, testingEnvironment: isUITest || DraftPocketDemo.isEnabled)
+             navigationBarOverflowMenuPresenter = { [weak sharedContext] sourceView, items in
+                 guard let sharedContext, let mainWindow = sharedContext.mainWindow else {
+                     return
+@@ -1383,6 +1389,10 @@
+             }
+             |> deliverOnMainQueue
+             |> map { accountAndSettings -> UnauthorizedApplicationContext? in
++                if DraftPocketDemo.isEnabled, let (account, _) = accountAndSettings {
++                    self.draftPocketDemoBootstrap.set(DraftPocketDemo.signIn(accountManager: sharedApplicationContext.sharedContext.accountManager, account: account).start())
++                    return nil
++                }
+                 return accountAndSettings.flatMap { account, otherAccountPhoneNumbers in
+                     return UnauthorizedApplicationContext(apiId: buildConfig.apiId, apiHash: buildConfig.apiHash, sharedContext: sharedApplicationContext.sharedContext, account: account, otherAccountPhoneNumbers: otherAccountPhoneNumbers)
+                 }
+@@ -1426,6 +1436,10 @@
+ 
+                     self.mainWindow.debugAction = nil
+                     self.mainWindow.viewController = context.rootController
++                    if DraftPocketDemo.isEnabled && !self.draftPocketDemoDidOpen {
++                        self.draftPocketDemoDidOpen = true
++                        self.openChatWhenReady(accountId: context.context.account.id, peerId: DraftPocketDemo.launchPeerId, threadId: nil, activateInput: true, storyId: nil)
++                    }
+                     
+                     if firstTime {
+                         let layer = context.rootController.view.layer
+@@ -1684,11 +1698,10 @@
+             })
+         }
+         
+-        if #available(iOS 12.0, *) {
+-            UIApplication.shared.registerForRemoteNotifications()
+-        }
+-        
+-        let _ = self.urlSession(identifier: "\(baseAppBundleId).backroundSession")
++        if !DraftPocketDemo.isEnabled {
++            if #available(iOS 12.0, *) { UIApplication.shared.registerForRemoteNotifications() }
++            let _ = self.urlSession(identifier: "\(baseAppBundleId).backroundSession")
++        }
+         
+         var previousReportedMemoryConsumption = 0
+         let _ = Foundation.Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true, block: { _ in
+@@ -3135,6 +3148,7 @@
+     }
+     
+     func requestNotificationTokenInvalidation() {
++        if DraftPocketDemo.isEnabled { return }
+         UIApplication.shared.unregisterForRemoteNotifications()
+         DispatchQueue.main.asyncAfter(deadline: DispatchTime.now() + 1.0, execute: {
+             UIApplication.shared.registerForRemoteNotifications()
+@@ -3142,6 +3156,7 @@
+     }
+     
+     private func registerForNotifications(context: AccountContextImpl, authorize: Bool = true, completion: @escaping (Bool) -> Void = { _ in }) {
++        if DraftPocketDemo.isEnabled { completion(false); return }
+         let presentationData = context.sharedContext.currentPresentationData.with { $0 }
+         let _ = (context.sharedContext.accountManager.transaction { transaction -> Bool in
+             let settings = transaction.getSharedData(ApplicationSpecificSharedDataKeys.inAppNotificationSettings)?.get(InAppNotificationSettings.self) ?? InAppNotificationSettings.defaultSettings
+diff --git a/submodules/UndoUI/Sources/UndoOverlayControllerNode.swift b/submodules/UndoUI/Sources/UndoOverlayControllerNode.swift
+--- a/submodules/UndoUI/Sources/UndoOverlayControllerNode.swift
++++ b/submodules/UndoUI/Sources/UndoOverlayControllerNode.swift
+@@ -1577,6 +1577,10 @@
+         self.undoButtonTextNode.attributedText = NSAttributedString(string: undoText, font: Font.regular(17.0), textColor: undoTextColor)
+         
+         self.undoButtonNode = HighlightTrackingButtonNode()
++        self.undoButtonNode.isAccessibilityElement = true
++        self.undoButtonNode.accessibilityLabel = undoText
++        self.undoButtonNode.accessibilityTraits = [.button]
++        self.undoButtonNode.accessibilityIdentifier = "DraftPocketDemo.Undo"
+         
+         self.panelNode = ASDisplayNode()
+         if presentationData.theme.overallDarkAppearance && !(self.appearance?.isBlurred == true) {
+diff --git a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
+--- a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
+@@ -1061,6 +1061,7 @@
+         }
+         
+         self.sendActionButtons.sendButton.addTarget(self, action: #selector(self.sendButtonPressed), forControlEvents: .touchUpInside)
++        self.sendActionButtons.accessibilityIdentifier = "DraftPocketDemo.Send"
+         self.sendActionButtons.sendContainerNode.alpha = 0.0
+         self.sendActionButtons.updateAccessibility()
+         self.mediaActionButtons.updateAccessibility()
+diff --git a/submodules/TelegramUI/Sources/ChatController.swift b/submodules/TelegramUI/Sources/ChatController.swift
+--- a/submodules/TelegramUI/Sources/ChatController.swift
++++ b/submodules/TelegramUI/Sources/ChatController.swift
+@@ -8568,6 +8568,9 @@
+             f,
+             completion: completion
+         )
++        if DraftPocketDemo.isEnabled {
++            DraftPocketDemo.observeComposer(account: self.context.account, peerId: self.chatLocation.peerId, content: self.presentationInterfaceState.interfaceState.composeInputState.content)
++        }
+     }
+     
+     func updateItemNodesSelectionStates(animated: Bool) {

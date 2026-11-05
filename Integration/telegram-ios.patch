@@ -1,0 +1,2442 @@
+diff --git a/Telegram/Telegram-iOS/en.lproj/Localizable.strings b/Telegram/Telegram-iOS/en.lproj/Localizable.strings
+index 242e45b324266c6113edb7ccc21cb11152b6873f..a2118708da797f069821016816d0db0c631ba9ae 100644
+--- a/Telegram/Telegram-iOS/en.lproj/Localizable.strings
++++ b/Telegram/Telegram-iOS/en.lproj/Localizable.strings
+@@ -17243,3 +17243,29 @@ Error: %8$@";
+ "Gift.Delete.Title" = "Delete Gift";
+ "Gift.Delete.Text" = "Do you want to delete this gift?\n\nIt will disappear from your profile and can't be restored.";
+ "Gift.Delete.Success" = "Gift Deleted";
++
++/* Draft Pocket — local device drafts. */
++"DraftPocket.Title" = "Draft Pocket";
++"DraftPocket.PutAside" = "Put Aside";
++"DraftPocket.Restore" = "Restore";
++"DraftPocket.Delete" = "Delete";
++"DraftPocket.Empty" = "Your pocket is empty";
++"DraftPocket.LocalOnly" = "Saved on this device. Your active draft syncs as usual.";
++"DraftPocket.Reply" = "Reply";
++"DraftPocket.Media" = "Media";
++"DraftPocket.Structured" = "Rich content";
++"DraftPocket.Deleted" = "Draft deleted";
++"DraftPocket.Unsupported" = "Finish the current action before using Draft Pocket.";
++"DraftPocket.Failed" = "The draft could not be moved. Your content has been kept.";
++"DraftPocket.Changed" = "The draft changed. Please try again.";
++"DraftPocket.Full" = "This pocket has 20 drafts. Restore or delete one first.";
++"DraftPocket.UnavailableReply" = "The original reply is unavailable. The draft text has been kept.";
++"DraftPocket.UndoDelete" = "Undo Delete";
++"DraftPocket.PendingDelete" = "Deleted drafts awaiting confirmation";
++"DraftPocket.MediaUnavailable" = "The complete media could not be saved safely. Your draft is unchanged.";
++"DraftPocket.StorageUnavailable" = "Draft Pocket could not be read. Stored drafts have not been changed.";
++"DraftPocket.InterruptedSends" = "Interrupted sends";
++"DraftPocket.RecoverSend" = "Recover to Pocket";
++"DraftPocket.SendNotPrepared" = "The media could not be preserved. Your message has not been sent and the draft is unchanged.";
++"DraftPocket.SendChanged" = "The draft changed while preparing to send. Your current text has been kept. Any saved recovery is in Draft Pocket.";
++"DraftPocket.MediaRecoveryUnavailable" = "Some saved media could not be recovered. Affected messages are paused; their drafts have not been deleted.";
+diff --git a/Tests/ComposerHarness/AppContext/HarnessSharedAccountContext+Generated.swift b/Tests/ComposerHarness/AppContext/HarnessSharedAccountContext+Generated.swift
+index 2a15f092784ef07850bdaee1f37355671de617a8..02b2b934225ef03eac830b0881359d614d37ba58 100644
+--- a/Tests/ComposerHarness/AppContext/HarnessSharedAccountContext+Generated.swift
++++ b/Tests/ComposerHarness/AppContext/HarnessSharedAccountContext+Generated.swift
+@@ -598,6 +598,9 @@ extension HarnessSharedAccountContext {
+     public func makeShareController(context: AccountContext, params: ShareControllerParams) -> ViewController {
+         fatalError("harness: SharedAccountContext.makeShareController is not provided")
+     }
++    public func makeShareScreen(context: AccountContext, params: ShareControllerParams) -> ViewController {
++        fatalError("harness: SharedAccountContext.makeShareScreen is not provided")
++    }
+     public func makeMiniAppListScreenInitialData(context: AccountContext) -> Signal<MiniAppListScreenInitialData, NoError> {
+         fatalError("harness: SharedAccountContext.makeMiniAppListScreenInitialData is not provided")
+     }
+diff --git a/Tests/ComposerHarness/BUILD b/Tests/ComposerHarness/BUILD
+index 7a8590d5d3cfa96dde5c8a7151d15128a4fbc144..bcaa87b7e7b2af870bb6c09d89327cd3503c5f17 100644
+--- a/Tests/ComposerHarness/BUILD
++++ b/Tests/ComposerHarness/BUILD
+@@ -212,12 +212,15 @@ swift_library(
+         "//submodules/AccountContext",
+         # `ChatRichTextInputNode` / `ChatRichTextFormatAction`, for the engine regression tests.
+         "//submodules/TelegramUI/Components/Chat/ChatInputTextNode",
++        "//submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer",
+         # `chatComposerInsertTextOnUsersBehalf` / `chatComposerInsertMention`: the chat's inserts on the
+         # user's behalf, called as the chat calls them (`HarnessChatInserts`).
+         "//submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode",
+         # `@testable`, for the fuzz test: it asks the engine's own presentation / derived-view
+         # verifiers after every step instead of letting them trap the test process.
+         "//submodules/TelegramUI/Components/RichTextEditor:RichTextEngineEditor",
++        # Draft Pocket verifies the native UITextPosition affinity after restoration.
++        "//submodules/TelegramUI/Components/RichTextEditor:RichTextInputDecUpstream",
+         # `Document` / `RichTextEditorClipboard`, for the drag-and-drop tests' fragments.
+         "//submodules/TelegramUI/Components/RichTextEditor:RichTextEditorCore",
+         "//submodules/TelegramUI/Components/RichTextEditor:RichTextEditorUIKit",
+@@ -238,6 +241,25 @@ ios_unit_test(
+     visibility = ["//Tests:__subpackages__"],
+ )
+ 
++# Draft Pocket's real composer selection regression lane. Uses a fresh simulator and no pre-action
++# that uninstalls apps on existing simulators. Filter class HarnessDraftPocketSelectionTests when
++# running this lane; the shared library also carries the existing harness regression controls.
++ios_test_runner(
++    name = "DraftPocketSelectionTestRunner",
++    device_type = "iPhone 17",
++    os_version = "27.0",
++)
++
++ios_unit_test(
++    name = "DraftPocketSelectionHarnessTests",
++    linkopts = ["-framework", "MediaPlayer"],
++    minimum_os_version = "15.0",
++    runner = ":DraftPocketSelectionTestRunner",
++    test_host = ":ComposerHarness",
++    deps = [":ComposerHarnessTestsLib"],
++    visibility = ["//visibility:public"],
++)
++
+ swift_library(
+     name = "ComposerHarnessUITestsLib",
+     testonly = True,
+diff --git a/build-system/Make/Make.py b/build-system/Make/Make.py
+index 4c3a64199fab8af21e55dea47b3b7deb0eb1f64f..610661d135606cf86bd565f965db31b9b39d5b2a 100644
+--- a/build-system/Make/Make.py
++++ b/build-system/Make/Make.py
+@@ -8,6 +8,7 @@ import tempfile
+ import subprocess
+ import shutil
+ import glob
++import uuid
+ 
+ from BuildEnvironment import resolve_executable, call_executable, run_executable_with_output, BuildEnvironmentVersions, BuildEnvironment
+ from ProjectGeneration import generate
+@@ -141,6 +142,8 @@ class BazelCommandLine:
+ 
+     def set_disable_provisioning_profiles(self):
+         self.disable_provisioning_profiles = True
++        # Simulator-only callers need neither profiles nor signing identities.
++        self.common_args += ['--features=apple.skip_codesign_simulator_bundles']
+ 
+     def set_profile_swift(self, value):
+         self.profile_swift = value
+@@ -326,18 +329,28 @@ class BazelCommandLine:
+         print(subprocess.list2cmdline(combined_arguments))
+         call_executable(combined_arguments)
+ 
+-    def invoke_test(self, test_target='Tests/AllTests'):
++    def invoke_test(self, test_target='Tests/AllTests', simulator_udid=None, build_only=False, test_filter=None):
+         combined_arguments = [
+             self.build_environment.bazel_path
+         ]
+         combined_arguments += self.get_startup_bazel_arguments()
+-        combined_arguments += ['test']
+-
+-        combined_arguments += ['--cache_test_results=no']
+-        combined_arguments += ['--test_output=errors']
++        combined_arguments += ['build' if build_only else 'test']
++
++        if not build_only:
++            combined_arguments += ['--cache_test_results=no']
++            combined_arguments += ['--test_output=all' if simulator_udid else '--test_output=errors']
++        if simulator_udid is not None and not build_only:
++            # The pinned rules_apple runner supports this public destination flag.
++            simulator_udid = str(uuid.UUID(simulator_udid)).upper()
++            combined_arguments += ['--test_arg=--destination=platform=ios_simulator,id=' + simulator_udid]
++        if test_filter is not None and not build_only:
++            combined_arguments += ['--test_filter=' + test_filter]
+ 
+         combined_arguments += [test_target]
+ 
++        if self.disable_provisioning_profiles:
++            combined_arguments += ['--//Telegram:disableProvisioningProfiles']
++
+         combined_arguments += self.common_args
+         combined_arguments += self.common_build_args
+         combined_arguments += self.get_define_arguments()
+@@ -605,6 +618,9 @@ def resolve_watch_provisioning_profile(arguments, base_path):
+ 
+ 
+ def build(bazel, arguments):
++    if arguments.disableProvisioningProfiles and arguments.configuration not in ('debug_sim_arm64', 'release_sim_arm64'):
++        raise ValueError('--disableProvisioningProfiles is supported only for Simulator builds')
++
+     if PostboxImportCheck.run(os.getcwd()) != 0:
+         sys.exit(1)
+ 
+@@ -631,6 +647,8 @@ def build(bazel, arguments):
+     )
+ 
+     bazel_command_line.set_configuration(arguments.configuration)
++    if arguments.disableProvisioningProfiles:
++        bazel_command_line.set_disable_provisioning_profiles()
+     if arguments.embedWatchApp:
+         if arguments.configuration in ('debug_arm64', 'release_arm64'):
+             if arguments.watchApiId is None or arguments.watchApiHash is None:
+@@ -713,9 +731,12 @@ def test(bazel, arguments):
+     )
+ 
+     bazel_command_line.set_configuration('debug_sim_arm64')
++    if arguments.disableProvisioningProfiles:
++        bazel_command_line.set_disable_provisioning_profiles()
+     bazel_command_line.set_build_number('10000')
+ 
+-    bazel_command_line.invoke_test(test_target=arguments.target)
++    bazel_command_line.invoke_test(test_target=arguments.target, simulator_udid=arguments.simulatorUDID,
++                                  build_only=arguments.buildOnly, test_filter=arguments.testFilter)
+ 
+ 
+ def query(bazel, arguments):
+@@ -947,6 +968,21 @@ if __name__ == '__main__':
+             '''
+     )
+     add_project_and_build_common_arguments(testParser)
++    testParser.add_argument(
++        '--simulatorUDID',
++        type=lambda value: str(uuid.UUID(value)).upper(),
++        help='Run on this existing dedicated Simulator UUID (public rules_apple destination).'
++    )
++    testParser.add_argument('--buildOnly', action='store_true', default=False,
++                           help='Build the exact test target/configuration without executing tests.')
++    testParser.add_argument('--testFilter', type=str,
++                           help='Forward an XCTest test selection through the pinned runner.')
++    testParser.add_argument(
++        '--disableProvisioningProfiles',
++        action='store_true',
++        default=False,
++        help='Run Simulator tests without provisioning profiles or code signing.'
++    )
+     testParser.add_argument(
+         '--target',
+         type=str,
+@@ -1025,6 +1061,12 @@ if __name__ == '__main__':
+         metavar='number'
+     )
+     add_project_and_build_common_arguments(buildParser)
++    buildParser.add_argument(
++        '--disableProvisioningProfiles',
++        action='store_true',
++        default=False,
++        help='Simulator only: disable provisioning profile inputs and code signing.'
++    )
+     buildParser.add_argument(
+         '--configuration',
+         choices=[
+diff --git a/submodules/AccountContext/Sources/ChatController.swift b/submodules/AccountContext/Sources/ChatController.swift
+index 1fca36ca9d938e4dabcce753ce025c814c12c7b3..4ad2c9877c3d974d12408a91aa6a6c375338b413 100644
+--- a/submodules/AccountContext/Sources/ChatController.swift
++++ b/submodules/AccountContext/Sources/ChatController.swift
+@@ -518,7 +518,7 @@ public struct ChatTextInputState: Codable, Equatable {
+         // so the caret is preserved in both branches.
+         let container = try decoder.container(keyedBy: StringCodingKey.self)
+         if let content = try? container.decode(ChatInputContent.self, forKey: "cm") {
+-            self.content = content
++            self.content = (try? container.decode(DraftPocketEmojiFiles.self, forKey: "ce"))?.resolving(content) ?? content
+         } else {
+             let attributedText = ((try? container.decode(ChatTextInputStateText.self, forKey: "at")) ?? ChatTextInputStateText()).attributedText()
+             self.content = chatInputContent(from: attributedText)
+@@ -531,7 +531,7 @@ public struct ChatTextInputState: Codable, Equatable {
+         } else {
+             flatRange = NSRange(location: self.content.length, length: 0)
+         }
+-        self.selection = ChatInputSelection(nsRange: flatRange, in: self.content)
++        self.selection = (try? container.decode(DraftPocketSelection.self, forKey: "cs").value) ?? ChatInputSelection(nsRange: flatRange, in: self.content)
+     }
+ 
+     public func encode(to encoder: Encoder) throws {
+@@ -541,6 +541,8 @@ public struct ChatTextInputState: Codable, Equatable {
+         // structure the flat `ChatTextInputStateText` round-trip would fragment, e.g. a multi-line quote). The
+         // legacy `"at"`/`"as0"`/`"as1"` keys below are kept as a back-compat mirror so any old reader still works.
+         try container.encode(self.content, forKey: "cm")
++        try container.encode(DraftPocketSelection(self.selection), forKey: "cs")
++        try container.encode(DraftPocketEmojiFiles(content: self.content), forKey: "ce")
+ 
+         try container.encode(ChatTextInputStateText(attributedText: self.inputText), forKey: "at")
+         try container.encode(Int32(self.selectionRange.lowerBound), forKey: "as0")
+diff --git a/submodules/ChatInterfaceState/BUILD b/submodules/ChatInterfaceState/BUILD
+index 29d4ed1235ad165cdd34080fdb75a21ac86a750e..5d3da278836389079083add64b914826bf1ff328 100644
+--- a/submodules/ChatInterfaceState/BUILD
++++ b/submodules/ChatInterfaceState/BUILD
+@@ -30,7 +30,7 @@ swift_library(
+     testonly = True,
+     srcs = glob([
+         "Tests/**/*.swift",
+-    ]),
++    ], exclude = ["Tests/DraftPocketComposerStateTests.swift"]),
+     deps = [
+         ":ChatInterfaceState",
+         "//submodules/TelegramCore:TelegramCore",
+@@ -56,3 +56,29 @@ ios_unit_test(
+         "//visibility:public",
+     ],
+ )
++
++# Feature-specific runner; the existing persistence suite retains its own runtime pin.
++swift_library(
++    name = "DraftPocketComposerTestsLib",
++    testonly = True,
++    srcs = ["Tests/DraftPocketComposerStateTests.swift"],
++    deps = [
++        ":ChatInterfaceState",
++        "//submodules/AccountContext:AccountContext",
++        "//submodules/TelegramCore:TelegramCore",
++    ],
++)
++
++ios_test_runner(
++    name = "DraftPocketComposerTestRunner",
++    device_type = "iPhone 17",
++    os_version = "27.0",
++)
++
++ios_unit_test(
++    name = "DraftPocketComposerTests",
++    minimum_os_version = "15.0",
++    runner = ":DraftPocketComposerTestRunner",
++    deps = [":DraftPocketComposerTestsLib"],
++    visibility = ["//visibility:public"],
++)
+diff --git a/submodules/ChatInterfaceState/Sources/ChatInterfaceState.swift b/submodules/ChatInterfaceState/Sources/ChatInterfaceState.swift
+index e50d5d3933b4213379c4947b999c4b1fed3ce996..c6aaf6c507b2279e63d5a4de5a889a1fcc30dd17 100644
+--- a/submodules/ChatInterfaceState/Sources/ChatInterfaceState.swift
++++ b/submodules/ChatInterfaceState/Sources/ChatInterfaceState.swift
+@@ -942,7 +942,12 @@ public final class ChatInterfaceState: Codable, Equatable {
+         guard var decodedState = try? EngineDecoder.decode(ChatInterfaceState.self, from: opaqueData) else {
+             return ChatInterfaceState().withUpdatedSynchronizeableInputState(state.synchronizeableInputState)
+         }
+-        decodedState = decodedState.withUpdatedSynchronizeableInputState(state.synchronizeableInputState)
++        // The synchronized form is a projection: it cannot carry a structural caret or
++        // full custom-emoji file objects. Keep the local canonical model when that
++        // projection still matches. A genuinely changed remote draft keeps precedence.
++        if decodedState.synchronizeableInputState != state.synchronizeableInputState {
++            decodedState = decodedState.withUpdatedSynchronizeableInputState(state.synchronizeableInputState)
++        }
+         return decodedState
+     }
+ 
+@@ -967,7 +972,8 @@ public final class ChatInterfaceState: Codable, Equatable {
+                     historyScrollMessageIndex: updatedState.historyScrollMessageIndex,
+                     mediaDraftState: mediaDraftState,
+                     synchronizeableInputState: updatedState.synchronizeableInputState
+-                ))
++                ),
++                retainedDraftResourceIds: draftPocketRetainedResourceIds(in: updatedState.composeInputState.content))
+         }
+     }
+ }
+diff --git a/submodules/Postbox/BUILD b/submodules/Postbox/BUILD
+index c619c0ccef35e1c39df5b4d863275dfef62e3839..80bdff1cd941d2248a3b6902aa6964cba7f06275 100644
+--- a/submodules/Postbox/BUILD
++++ b/submodules/Postbox/BUILD
+@@ -121,3 +121,18 @@ ios_unit_test(
+         "//visibility:public",
+     ],
+ )
++
++# Isolated media prototype: a fresh simulator, no global reuse or app-data deletion hook.
++ios_test_runner(
++    name = "DraftMediaRetentionTestRunner",
++    device_type = "iPhone 17",
++    os_version = "27.0",
++)
++
++ios_unit_test(
++    name = "DraftMediaRetentionTests",
++    minimum_os_version = "15.0",
++    runner = ":DraftMediaRetentionTestRunner",
++    deps = [":PostboxTestsLib"],
++    visibility = ["//visibility:public"],
++)
+diff --git a/submodules/Postbox/Sources/MediaBox.swift b/submodules/Postbox/Sources/MediaBox.swift
+index e28a2d0f1b2467dc7dc1758bae0f396a8d24c9ae..007549170cb41177c4cb12636eb6dacc8d3b6b93 100644
+--- a/submodules/Postbox/Sources/MediaBox.swift
++++ b/submodules/Postbox/Sources/MediaBox.swift
+@@ -144,6 +144,10 @@ public final class MediaBox {
+     public let dataFileManager: MediaBoxFileManager
+     private let cacheQueue = Queue()
+     private let timeBasedCleanup: TimeBasedCleanup
++    public let draftResourceRetention: MediaBoxResourceRetention
++    public let draftResourceRecoverySucceeded: Bool
++    public let draftResourceRecoveryFailedIds: Set<String>
++    public let draftResourceRecoveryIndexCorrupt: Bool
+     
+     public let storageBox: StorageBox
+     public let cacheStorageBox: StorageBox
+@@ -191,6 +195,21 @@ public final class MediaBox {
+     public init(basePath: String, isMainProcess: Bool) {
+         self.basePath = basePath
+         self.isMainProcess = isMainProcess
++        let draftResourceRetention = MediaBoxResourceRetention(mediaBoxPath: basePath)
++        self.draftResourceRetention = draftResourceRetention
++        // Recover originals before any file context or pending upload can capture their paths.
++        // Corrupt archives remain pinned; never silently discard the retained copy.
++        do {
++            let failures = draftResourceRetention.hasPersistedResources ? try draftResourceRetention.beginSession().recoverOriginalsReportingFailures() : []
++            self.draftResourceRecoveryFailedIds = failures
++            self.draftResourceRecoveryIndexCorrupt = false
++            self.draftResourceRecoverySucceeded = failures.isEmpty
++        } catch {
++            self.draftResourceRecoveryFailedIds = []
++            self.draftResourceRecoveryIndexCorrupt = true
++            self.draftResourceRecoverySucceeded = false
++            postboxLog("MediaBox draft retention startup recovery failed")
++        }
+         
+         self.storageBox = StorageBox(logger: StorageBox.Logger(impl: { string in
+             postboxLog(string)
+@@ -204,7 +223,7 @@ public final class MediaBox {
+             self.basePath + "/animation-cache"
+         ], totalSizeBasedPath: self.basePath, shortLivedPaths: [
+             self.basePath + "/short-cache"
+-        ])
++        ], removeFiles: { paths in draftResourceRetention.removeIfUnowned(paths: paths) })
+         
+         self.dataFileManager = MediaBoxFileManager(queue: self.dataQueue)
+         
+@@ -342,7 +361,9 @@ public final class MediaBox {
+     public func moveResourceData(_ id: MediaResourceId, toTempPath: String) {
+         self.dataQueue.async {
+             let paths = self.storePathsForId(id)
+-            let _ = try? FileManager.default.moveItem(at: URL(fileURLWithPath: paths.complete), to: URL(fileURLWithPath: toTempPath))
++            if (try? FileManager.default.copyItem(atPath: paths.complete, toPath: toTempPath)) != nil {
++                self.draftResourceRetention.removeIfUnowned(paths: [paths.complete], wait: false)
++            }
+         }
+     }
+     
+@@ -362,8 +383,7 @@ public final class MediaBox {
+             let pathsTo = self.storePathsForId(to)
+             link(pathsFrom.partial, pathsTo.partial)
+             link(pathsFrom.complete, pathsTo.complete)
+-            unlink(pathsFrom.partial)
+-            unlink(pathsFrom.complete)
++            self.draftResourceRetention.removeIfUnowned(paths: [pathsFrom.partial, pathsFrom.complete], wait: false)
+         }
+         if synchronous {
+             begin()
+@@ -504,7 +524,8 @@ public final class MediaBox {
+     }
+     
+     public func completedResourcePath(id: MediaResourceId, pathExtension: String? = nil) -> String? {
+-        let paths = self.storePathsForId(id)
++        let storedPaths = self.storePathsForId(id)
++        let paths = (complete: self.draftResourceRetention.retainedCompletePath(id: id) ?? storedPaths.complete, partial: storedPaths.partial)
+         if let _ = fileSize(paths.complete) {
+             self.timeBasedCleanup.touch(paths: [
+                 paths.complete
+@@ -532,7 +553,8 @@ public final class MediaBox {
+             let disposable = MetaDisposable()
+             
+             let begin: () -> Void = {
+-                let paths = self.storePathsForId(id)
++                let storedPaths = self.storePathsForId(id)
++                let paths = (complete: self.draftResourceRetention.retainedCompletePath(id: id) ?? storedPaths.complete, partial: storedPaths.partial)
+                 
+                 if let completeSize = fileSize(paths.complete) {
+                     self.timeBasedCleanup.touch(paths: [
+@@ -564,6 +586,14 @@ public final class MediaBox {
+                             }
+                             let dataDisposable = fileContext.data(range: 0 ..< Int64.max, waitUntilAfterInitialFetch: waitUntilAfterInitialFetch, next: { value in
+                                 self.dataQueue.async {
++                                    // A file context may predate retention. Re-check the read alias
++                                    // for each callback rather than changing its writable complete path.
++                                    if let retained = self.draftResourceRetention.retainedCompletePath(id: id), let size = fileSize(retained) {
++                                        let path = self.completedResourcePath(id: id, pathExtension: pathExtension) ?? retained
++                                        subscriber.putNext(MediaResourceData(path: path, offset: 0, size: size, complete: true))
++                                        subscriber.putCompletion()
++                                        return
++                                    }
+                                     if value.complete {
+                                         if let pathExtension = pathExtension {
+                                             let symlinkPath = paths.complete + ".\(pathExtension)"
+@@ -702,7 +732,8 @@ public final class MediaBox {
+     }
+     
+     public func internal_resourceData(id: MediaResourceId, size: Int64, in range: Range<Int64>) -> (file: ManagedFile, length: Int)? {
+-        let paths = self.storePathsForId(id)
++        let storedPaths = self.storePathsForId(id)
++        let paths = (complete: self.draftResourceRetention.retainedCompletePath(id: id) ?? storedPaths.complete, partial: storedPaths.partial)
+         
+         self.timeBasedCleanup.touch(paths: [
+             paths.complete
+@@ -724,7 +755,8 @@ public final class MediaBox {
+     }
+     
+     public func internal_resourceDataIsCached(id: MediaResourceId, size: Int64, in range: Range<Int64>) -> Bool {
+-        let paths = self.storePathsForId(id)
++        let storedPaths = self.storePathsForId(id)
++        let paths = (complete: self.draftResourceRetention.retainedCompletePath(id: id) ?? storedPaths.complete, partial: storedPaths.partial)
+         
+         if let _ = fileSize(paths.complete) {
+             return true
+@@ -738,8 +770,9 @@ public final class MediaBox {
+         return Signal { subscriber in
+             let disposable = MetaDisposable()
+             
+-            if attemptSynchronously {
+-                let paths = self.storePathsForId(id)
++            if attemptSynchronously || self.draftResourceRetention.retainedCompletePath(id: id) != nil {
++                let storedPaths = self.storePathsForId(id)
++                let paths = (complete: self.draftResourceRetention.retainedCompletePath(id: id) ?? storedPaths.complete, partial: storedPaths.partial)
+                 
+                 if let completeSize = fileSize(paths.complete) {
+                     self.timeBasedCleanup.touch(paths: [
+@@ -779,6 +812,18 @@ public final class MediaBox {
+                 }
+                 
+                 let dataDisposable = fileContext.data(range: range, waitUntilAfterInitialFetch: false, next: { result in
++                    if let retained = self.draftResourceRetention.retainedCompletePath(id: id), let file = ManagedFile(queue: self.dataQueue, path: retained, mode: .read), let size = file.getSize() {
++                        let lower = min(size, max(0, range.lowerBound))
++                        let upper = min(size, max(0, range.upperBound))
++                        if lower < upper && upper - lower <= 64 * 1024 * 1024 {
++                            let _ = file.seek(position: lower)
++                            subscriber.putNext((file.readData(count: Int(upper - lower)), true))
++                        } else {
++                            subscriber.putNext((Data(), true))
++                        }
++                        subscriber.putCompletion()
++                        return
++                    }
+                     if let file = ManagedFile(queue: self.dataQueue, path: result.path, mode: .read), let fileSize = file.getSize() {
+                         if result.complete {
+                             let clippedLowerBound = min(result.offset, fileSize)
+@@ -1770,7 +1815,7 @@ public final class MediaBox {
+                     }
+                     
+                     count += 1
+-                    unlink(self.basePath + "/" + path)
++                    self.draftResourceRetention.removeIfUnowned(paths: [self.basePath + "/" + path])
+                     reportProgress(count)
+                 }
+                 subscriber.putCompletion()
+@@ -1821,6 +1866,7 @@ public final class MediaBox {
+                     }
+                 }
+                 
++                var retainedIds = Set<MediaResourceId>()
+                 for id in ids {
+                     if !force {
+                         if self.fileContexts[id] != nil {
+@@ -1835,22 +1881,25 @@ public final class MediaBox {
+                         }
+                     }
+                     let paths = self.storePathsForId(id)
+-                    unlink(paths.complete)
+-                    unlink(paths.partial)
+-                    unlink(paths.partial + ".meta")
++                    guard self.draftResourceRetention.removeIfUnowned(paths: [paths.complete, paths.partial, paths.partial + ".meta"]) else {
++                        retainedIds.insert(id)
++                        count += 3
++                        reportProgress(count)
++                        continue
++                    }
+                     self.fileContexts.removeValue(forKey: id)
+                     count += 3
+                     reportProgress(count)
+                 }
+                 
+                 for path in pathsToDelete {
+-                    unlink(path)
++                    self.draftResourceRetention.removeIfUnowned(paths: [path])
+                     count += 1
+                     reportProgress(count)
+                 }
+                 
+                 if notify {
+-                    for id in ids {
++                    for id in ids where !retainedIds.contains(id) {
+                         if let context = self.statusContexts[id] {
+                             context.status = .Remote(progress: 0.0)
+                             for f in context.subscribers.copyItems() {
+@@ -1915,12 +1964,9 @@ public final class MediaBox {
+                 let metaPath = paths.partial + ".meta"
+                 switch staleEmptyPartialFileState(partialPath: paths.partial, metaPath: metaPath, olderThan: minTimestamp) {
+                 case .emptyPartial:
+-                    unlink(paths.partial)
+-                    unlink(metaPath)
+-                    removedCount += 1
++                    if self.draftResourceRetention.removeIfUnowned(paths: [paths.partial, metaPath]) { removedCount += 1 }
+                 case .orphanedMeta:
+-                    unlink(metaPath)
+-                    removedCount += 1
++                    if self.draftResourceRetention.removeIfUnowned(paths: [metaPath]) { removedCount += 1 }
+                 case nil:
+                     break
+                 }
+@@ -1947,15 +1993,13 @@ public final class MediaBox {
+                         }
+                     }
+                     let paths = self.storePathsForId(id)
+-                    unlink(paths.complete)
+-                    unlink(paths.partial)
+-                    unlink(paths.partial + ".meta")
++                    guard self.draftResourceRetention.removeIfUnowned(paths: [paths.complete, paths.partial, paths.partial + ".meta"]) else { continue }
+                     self.fileContexts.removeValue(forKey: id)
+                     removedIds.append(id)
+                 }
+                 
+                 if notify {
+-                    for id in ids {
++                    for id in removedIds {
+                         if let context = self.statusContexts[id] {
+                             context.status = .Remote(progress: 0.0)
+                             for f in context.subscribers.copyItems() {
+diff --git a/submodules/Postbox/Sources/Postbox.swift b/submodules/Postbox/Sources/Postbox.swift
+index 5fdf8a8ded8f23c92592814e9072b6d4f8a0c5c1..0973bdc8caf1a83d4d30bfed84c8d8ebbeffd217 100644
+--- a/submodules/Postbox/Sources/Postbox.swift
++++ b/submodules/Postbox/Sources/Postbox.swift
+@@ -1588,11 +1588,25 @@ public func openPostbox(basePath: String, seedConfiguration: SeedConfiguration,
+                 let endTime = CFAbsoluteTimeGetCurrent()
+                 postboxLog("Postbox load took \((endTime - startTime) * 1000.0) ms")
+                 
+-                subscriber.putNext(.postbox(Postbox(queue: queue, basePath: basePath, seedConfiguration: seedConfiguration, valueBox: valueBox, timestampForAbsoluteTimeBasedOperations: timestampForAbsoluteTimeBasedOperations, isMainProcess: isMainProcess, isTemporary: isTemporary, tempDir: tempDir, useCaches: useCaches)))
+-
+-                postboxLog("openPostbox, putCompletion")
+-
+-                subscriber.putCompletion()
++                // Keep the original database/error checks ahead of MediaBox: its
++                // storage initialization assumes a usable account directory.
++                // Upgrades have committed; no SQLite transaction spans recovery.
++                let openedValueBox = valueBox
++                let preparedValueBox = QueueLocalObject(queue: queue, generate: { openedValueBox })
++                let preparedTempDir = tempDir
++                Queue.concurrentBackgroundQueue().async {
++                    // A retention session owner can need this Postbox queue to
++                    // commit. Wait off-queue, then inject the recovered instance.
++                    let mediaBox = MediaBox(basePath: basePath + "/media", isMainProcess: isMainProcess)
++                    preparedValueBox.with { valueBox in
++                        subscriber.putNext(.postbox(Postbox(queue: queue, basePath: basePath, mediaBox: mediaBox, seedConfiguration: seedConfiguration, valueBox: valueBox, timestampForAbsoluteTimeBasedOperations: timestampForAbsoluteTimeBasedOperations, isTemporary: isTemporary, tempDir: preparedTempDir, useCaches: useCaches)))
++                        postboxLog("openPostbox, putCompletion")
++                        subscriber.putCompletion()
++                    }
++                }
++                // Like the original EmptyDisposable startup, an already-started
++                // open finishes if its observer leaves. QueueLocalObject also
++                // guarantees SQLite releases on its queue on that path.
+                 break
+             }
+         }
+@@ -4691,10 +4705,10 @@ public class Postbox {
+     init(
+         queue: Queue,
+         basePath: String,
++        mediaBox: MediaBox,
+         seedConfiguration: SeedConfiguration,
+         valueBox: SqliteValueBox,
+         timestampForAbsoluteTimeBasedOperations: Int32,
+-        isMainProcess: Bool,
+         isTemporary: Bool,
+         tempDir: TempBoxDirectory?,
+         useCaches: Bool
+@@ -4704,7 +4718,7 @@ public class Postbox {
+         self.seedConfiguration = seedConfiguration
+ 
+         postboxLog("MediaBox path: \(basePath + "/media")")
+-        self.mediaBox = MediaBox(basePath: basePath + "/media", isMainProcess: isMainProcess)
++        self.mediaBox = mediaBox
+ 
+         let isInTransaction = self.isInTransaction
+         
+diff --git a/submodules/Postbox/Sources/TimeBasedCleanup.swift b/submodules/Postbox/Sources/TimeBasedCleanup.swift
+index b874fd269eec34983daf34a2be32cbf62ab1c7c3..af68b3ee66bfbf9f6b043ab413f30b1e85555f98 100644
+--- a/submodules/Postbox/Sources/TimeBasedCleanup.swift
++++ b/submodules/Postbox/Sources/TimeBasedCleanup.swift
+@@ -189,7 +189,7 @@ func scanTimestamp(_ seconds: Int) -> Int32 {
+     return Int32(clamping: max(0, min(seconds, Int(Int32.max) - 1)))
+ }
+ 
+-func scanFiles(at path: String, olderThan minTimestamp: Int32, includeSubdirectories: Bool, performSizeMapping: Bool, tempDatabase: TempScanDatabase, reportMemoryUsageInterval: Int, reportMemoryUsageRemaining: inout Int, seenLinkedInodes: inout Set<FileIdentity>, isCancelled: () -> Bool = { false }, didUnlink: ((String) -> Void)? = nil) -> ScanFilesResult {
++func scanFiles(at path: String, olderThan minTimestamp: Int32, includeSubdirectories: Bool, performSizeMapping: Bool, tempDatabase: TempScanDatabase, reportMemoryUsageInterval: Int, reportMemoryUsageRemaining: inout Int, seenLinkedInodes: inout Set<FileIdentity>, isCancelled: () -> Bool = { false }, didUnlink: ((String) -> Void)? = nil, removeFiles: ([String]) -> Bool = { paths in paths.allSatisfy { unlink($0) == 0 || errno == ENOENT } }) -> ScanFilesResult {
+     var result = ScanFilesResult()
+     
+     var subdirectories: [String] = []
+@@ -234,10 +234,10 @@ func scanFiles(at path: String, olderThan minTimestamp: Int32, includeSubdirecto
+                     }
+                 } else {
+                     if value.st_mtimespec.tv_sec < minTimestamp {
+-                        unlink(pathBuffer)
+-                        result.unlinkedCount += 1
+-                        if let didUnlink = didUnlink {
+-                            didUnlink(String(cString: pathBuffer))
++                        let filePath = String(cString: pathBuffer)
++                        if removeFiles([filePath]) {
++                            result.unlinkedCount += 1
++                            didUnlink?(filePath)
+                         }
+                     } else if isSymbolicLink {
+                         var targetIdentity: FileIdentity?
+@@ -294,7 +294,7 @@ func scanFiles(at path: String, olderThan minTimestamp: Int32, includeSubdirecto
+             if isCancelled() {
+                 break
+             }
+-            let subResult = scanFiles(at: subPath, olderThan: minTimestamp, includeSubdirectories: true, performSizeMapping: performSizeMapping, tempDatabase: tempDatabase, reportMemoryUsageInterval: reportMemoryUsageInterval, reportMemoryUsageRemaining: &reportMemoryUsageRemaining, seenLinkedInodes: &seenLinkedInodes, isCancelled: isCancelled, didUnlink: didUnlink)
++            let subResult = scanFiles(at: subPath, olderThan: minTimestamp, includeSubdirectories: true, performSizeMapping: performSizeMapping, tempDatabase: tempDatabase, reportMemoryUsageInterval: reportMemoryUsageInterval, reportMemoryUsageRemaining: &reportMemoryUsageRemaining, seenLinkedInodes: &seenLinkedInodes, isCancelled: isCancelled, didUnlink: didUnlink, removeFiles: removeFiles)
+             result.totalSize += subResult.totalSize
+             result.unlinkedCount += subResult.unlinkedCount
+         }
+@@ -347,8 +347,9 @@ private final class TimeBasedCleanupImpl {
+     private let scheduledScanDisposable = MetaDisposable()
+     private let scanQueue = Queue(name: "TimeBasedCleanupScan", qos: .background)
+     private let scanDelay: Double
++    private let removeFiles: ([String]) -> Bool
+     
+-    init(queue: Queue, storageBox: StorageBox, cacheStorageBox: StorageBox, generalPaths: [String], totalSizeBasedPath: String, shortLivedPaths: [String], scanDelay: Double) {
++    init(queue: Queue, storageBox: StorageBox, cacheStorageBox: StorageBox, generalPaths: [String], totalSizeBasedPath: String, shortLivedPaths: [String], scanDelay: Double, removeFiles: @escaping ([String]) -> Bool) {
+         self.queue = queue
+         self.storageBox = storageBox
+         self.cacheStorageBox = cacheStorageBox
+@@ -356,6 +357,7 @@ private final class TimeBasedCleanupImpl {
+         self.totalSizeBasedPath = totalSizeBasedPath
+         self.shortLivedPaths = shortLivedPaths
+         self.scanDelay = scanDelay
++        self.removeFiles = removeFiles
+     }
+     
+     deinit {
+@@ -386,6 +388,7 @@ private final class TimeBasedCleanupImpl {
+         let shortLivedPaths = self.shortLivedPaths
+         let storageBox = self.storageBox
+         let cacheStorageBox = self.cacheStorageBox
++        let removeFiles = self.removeFiles
+         let scanQueue = self.scanQueue
+         let scanOnce = Signal<Never, NoError> { subscriber in
+             let cancelled = Atomic<Bool>(value: false)
+@@ -485,7 +488,7 @@ private final class TimeBasedCleanupImpl {
+                 }
+                 
+                 for path in shortLivedPaths {
+-                    let scanResult = scanFiles(at: path, olderThan: oldestShortLivedTimestamp, includeSubdirectories: true, performSizeMapping: performSizeMapping, tempDatabase: tempDatabase, reportMemoryUsageInterval: reportMemoryUsageInterval, reportMemoryUsageRemaining: &reportMemoryUsageRemaining, seenLinkedInodes: &seenLinkedInodes, isCancelled: isCancelled, didUnlink: didUnlinkCacheFile)
++                    let scanResult = scanFiles(at: path, olderThan: oldestShortLivedTimestamp, includeSubdirectories: true, performSizeMapping: performSizeMapping, tempDatabase: tempDatabase, reportMemoryUsageInterval: reportMemoryUsageInterval, reportMemoryUsageRemaining: &reportMemoryUsageRemaining, seenLinkedInodes: &seenLinkedInodes, isCancelled: isCancelled, didUnlink: didUnlinkCacheFile, removeFiles: removeFiles)
+                     if !paths.contains(path) {
+                         paths.append(path)
+                     }
+@@ -495,7 +498,7 @@ private final class TimeBasedCleanupImpl {
+                 
+                 if general < Int32.max || (gigabytesLimit < Int32.max && performSizeMapping) {
+                     for path in generalPaths {
+-                        let scanResult = scanFiles(at: path, olderThan: oldestGeneralTimestamp, includeSubdirectories: true, performSizeMapping: performSizeMapping, tempDatabase: tempDatabase, reportMemoryUsageInterval: reportMemoryUsageInterval, reportMemoryUsageRemaining: &reportMemoryUsageRemaining, seenLinkedInodes: &seenLinkedInodes, isCancelled: isCancelled, didUnlink: didUnlinkCacheFile)
++                        let scanResult = scanFiles(at: path, olderThan: oldestGeneralTimestamp, includeSubdirectories: true, performSizeMapping: performSizeMapping, tempDatabase: tempDatabase, reportMemoryUsageInterval: reportMemoryUsageInterval, reportMemoryUsageRemaining: &reportMemoryUsageRemaining, seenLinkedInodes: &seenLinkedInodes, isCancelled: isCancelled, didUnlink: didUnlinkCacheFile, removeFiles: removeFiles)
+                         if !paths.contains(path) {
+                             paths.append(path)
+                         }
+@@ -505,7 +508,7 @@ private final class TimeBasedCleanupImpl {
+                 }
+                 
+                 if gigabytesLimit < Int32.max {
+-                    let scanResult = scanFiles(at: totalSizeBasedPath, olderThan: 0, includeSubdirectories: false, performSizeMapping: performSizeMapping, tempDatabase: tempDatabase, reportMemoryUsageInterval: reportMemoryUsageInterval, reportMemoryUsageRemaining: &reportMemoryUsageRemaining, seenLinkedInodes: &seenLinkedInodes, isCancelled: isCancelled)
++                    let scanResult = scanFiles(at: totalSizeBasedPath, olderThan: 0, includeSubdirectories: false, performSizeMapping: performSizeMapping, tempDatabase: tempDatabase, reportMemoryUsageInterval: reportMemoryUsageInterval, reportMemoryUsageRemaining: &reportMemoryUsageRemaining, seenLinkedInodes: &seenLinkedInodes, isCancelled: isCancelled, removeFiles: removeFiles)
+                     if !paths.contains(totalSizeBasedPath) {
+                         paths.append(totalSizeBasedPath)
+                     }
+@@ -524,12 +527,12 @@ private final class TimeBasedCleanupImpl {
+                         if isCancelled() {
+                             return false
+                         }
++                        guard removeFiles(filePaths) else { return true }
+                         remainingSize -= size
+                         
+                         // Every path here is a hard link to the same inode; all of them
+                         // must go for the space to be released.
+                         for filePath in filePaths {
+-                            unlink(filePath)
+                             removedGeneralLimitCount += 1
+                             
+                             if (filePath as NSString).deletingLastPathComponent == totalSizeBasedPath {
+@@ -615,10 +618,10 @@ final class TimeBasedCleanup {
+     private let queue = Queue()
+     private let impl: QueueLocalObject<TimeBasedCleanupImpl>
+     
+-    init(storageBox: StorageBox, cacheStorageBox: StorageBox, generalPaths: [String], totalSizeBasedPath: String, shortLivedPaths: [String], scanDelay: Double = 10.0) {
++    init(storageBox: StorageBox, cacheStorageBox: StorageBox, generalPaths: [String], totalSizeBasedPath: String, shortLivedPaths: [String], scanDelay: Double = 10.0, removeFiles: @escaping ([String]) -> Bool = { paths in paths.allSatisfy { unlink($0) == 0 || errno == ENOENT } }) {
+         let queue = self.queue
+         self.impl = QueueLocalObject(queue: self.queue, generate: {
+-            return TimeBasedCleanupImpl(queue: queue, storageBox: storageBox, cacheStorageBox: cacheStorageBox, generalPaths: generalPaths, totalSizeBasedPath: totalSizeBasedPath, shortLivedPaths: shortLivedPaths, scanDelay: scanDelay)
++            return TimeBasedCleanupImpl(queue: queue, storageBox: storageBox, cacheStorageBox: cacheStorageBox, generalPaths: generalPaths, totalSizeBasedPath: totalSizeBasedPath, shortLivedPaths: shortLivedPaths, scanDelay: scanDelay, removeFiles: removeFiles)
+         })
+     }
+     
+diff --git a/submodules/Postbox/Sources/Utils/Decoder/AdaptedPostboxDecoder.swift b/submodules/Postbox/Sources/Utils/Decoder/AdaptedPostboxDecoder.swift
+index 267c999109311cca5a644cea3906167d1ef0e030..8ba2ac2269c73e27fdeb2c5d5fb6f91255e2c62d 100644
+--- a/submodules/Postbox/Sources/Utils/Decoder/AdaptedPostboxDecoder.swift
++++ b/submodules/Postbox/Sources/Utils/Decoder/AdaptedPostboxDecoder.swift
+@@ -25,10 +25,18 @@ public final class AdaptedPostboxDecoder {
+         }
+     }
+ 
+-    public init() {
++    private let validateData: Bool
++
++    /// Opt-in for records that must reject malformed persistence instead of invoking
++    /// the legacy decoder's programmer assertions. Ordinary callers retain their path.
++    public init(validateData: Bool = false) {
++        self.validateData = validateData
+     }
+ 
+     public func decode<T>(_ type: T.Type, from data: Data) throws -> T where T : Decodable {
++        if self.validateData && !PostboxDecoder.isWellFormedData(data) {
++            throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "Malformed Postbox record"))
++        }
+         return try self.decode(type, from: data, contentType: .object)
+     }
+ 
+@@ -40,7 +48,7 @@ public final class AdaptedPostboxDecoder {
+                 preconditionFailure()
+             }
+         }
+-        let decoder = _AdaptedPostboxDecoder(data: data, contentType: contentType)
++        let decoder = _AdaptedPostboxDecoder(data: data, contentType: contentType, validateData: self.validateData)
+         return try T(from: decoder)
+     }
+ }
+@@ -89,10 +97,12 @@ final class _AdaptedPostboxDecoder {
+ 
+     fileprivate let data: Data
+     fileprivate let contentType: AdaptedPostboxDecoder.ContentType
++    fileprivate let validateData: Bool
+     
+-    init(data: Data, contentType: AdaptedPostboxDecoder.ContentType) {
++    init(data: Data, contentType: AdaptedPostboxDecoder.ContentType, validateData: Bool = false) {
+         self.data = data
+         self.contentType = contentType
++        self.validateData = validateData
+     }
+ }
+ 
+@@ -101,27 +111,35 @@ extension _AdaptedPostboxDecoder: Decoder {
+         precondition(self.container == nil)
+     }
+         
+-    func container<Key>(keyedBy type: Key.Type) -> KeyedDecodingContainer<Key> where Key : CodingKey {
++    func container<Key>(keyedBy type: Key.Type) throws -> KeyedDecodingContainer<Key> where Key : CodingKey {
+         assertCanCreateContainer()
+ 
+-        let container = KeyedContainer<Key>(data: self.data, codingPath: self.codingPath, userInfo: self.userInfo)
++        if self.validateData {
++            guard case .object = self.contentType else {
++                throw DecodingError.dataCorrupted(.init(codingPath: self.codingPath, debugDescription: "Expected a Postbox object"))
++            }
++        }
++
++        let container = KeyedContainer<Key>(data: self.data, codingPath: self.codingPath, userInfo: self.userInfo, validateData: self.validateData)
+         self.container = container
+ 
+         return KeyedDecodingContainer(container)
+     }
+ 
+-    func unkeyedContainer() -> UnkeyedDecodingContainer {
++    func unkeyedContainer() throws -> UnkeyedDecodingContainer {
+         assertCanCreateContainer()
+ 
+         let decoder = PostboxDecoder(buffer: MemoryBuffer(data: self.data))
+ 
+-        // Every raw reader returns nil for a malformed value. `unkeyedContainer()`
+-        // cannot throw, so the container is created empty with `isCorrupted` set and
+-        // reports the corruption from its first `decode` instead.
++        // Preserve the ordinary raw readers' existing corruption path: an empty
++        // container with `isCorrupted` reports failure from its first decode.
+         var content: UnkeyedContainer.Content?
+         var isCorrupted = false
+         switch self.contentType {
+         case .object:
++            if self.validateData {
++                throw DecodingError.dataCorrupted(.init(codingPath: self.codingPath, debugDescription: "Expected a Postbox array"))
++            }
+             preconditionFailure()
+         case .int32Array:
+             if let array = decoder.decodeInt32ArrayRaw() {
+@@ -168,7 +186,7 @@ extension _AdaptedPostboxDecoder: Decoder {
+         }
+ 
+         if let content = content {
+-            let container = UnkeyedContainer(data: self.data, codingPath: self.codingPath, userInfo: self.userInfo, content: content, isCorrupted: isCorrupted)
++            let container = UnkeyedContainer(data: self.data, codingPath: self.codingPath, userInfo: self.userInfo, content: content, isCorrupted: isCorrupted, validateData: self.validateData)
+             self.container = container
+ 
+             return container
+@@ -177,7 +195,10 @@ extension _AdaptedPostboxDecoder: Decoder {
+         }
+     }
+     
+-    func singleValueContainer() -> SingleValueDecodingContainer {
++    func singleValueContainer() throws -> SingleValueDecodingContainer {
++        if self.validateData {
++            throw DecodingError.dataCorrupted(.init(codingPath: self.codingPath, debugDescription: "Unsupported Postbox single value"))
++        }
+         preconditionFailure()
+     }
+ }
+diff --git a/submodules/Postbox/Sources/Utils/Decoder/AdaptedPostboxKeyedDecodingContainer.swift b/submodules/Postbox/Sources/Utils/Decoder/AdaptedPostboxKeyedDecodingContainer.swift
+index 63a79a17c7b0bc5fdf52a86d68fc8f77ee5c0e1e..c81616bf79d14aadb3b7a1bb5cd586f3a3eee37e 100644
+--- a/submodules/Postbox/Sources/Utils/Decoder/AdaptedPostboxKeyedDecodingContainer.swift
++++ b/submodules/Postbox/Sources/Utils/Decoder/AdaptedPostboxKeyedDecodingContainer.swift
+@@ -5,11 +5,13 @@ extension _AdaptedPostboxDecoder {
+         var codingPath: [CodingKey]
+         var userInfo: [CodingUserInfoKey: Any]
+         let decoder: PostboxDecoder
++        let validateData: Bool
+ 
+-        init(data: Data, codingPath: [CodingKey], userInfo: [CodingUserInfoKey : Any]) {
++        init(data: Data, codingPath: [CodingKey], userInfo: [CodingUserInfoKey : Any], validateData: Bool = false) {
+             self.codingPath = codingPath
+             self.userInfo = userInfo
+             self.decoder = PostboxDecoder(buffer: MemoryBuffer(data: data))
++            self.validateData = validateData
+         }
+     }
+ }
+@@ -44,7 +46,7 @@ extension _AdaptedPostboxDecoder.KeyedContainer: KeyedDecodingContainerProtocol
+                 }
+             }
+             if let mappedType = AdaptedPostboxDecoder.ContentType(valueType: valueType) {
+-                return try AdaptedPostboxDecoder().decode(T.self, from: data, contentType: mappedType)
++                return try AdaptedPostboxDecoder(validateData: self.validateData).decode(T.self, from: data, contentType: mappedType)
+             } else {
+                 switch valueType {
+                 case .Bytes:
+diff --git a/submodules/Postbox/Sources/Utils/Decoder/AdaptedPostboxUnkeyedDecodingContainer.swift b/submodules/Postbox/Sources/Utils/Decoder/AdaptedPostboxUnkeyedDecodingContainer.swift
+index ebc3a779d7ace6b69e188fd549ec95ff91c2e753..71f12ca139cd1132db28da1cafd09896ac4eff09 100644
+--- a/submodules/Postbox/Sources/Utils/Decoder/AdaptedPostboxUnkeyedDecodingContainer.swift
++++ b/submodules/Postbox/Sources/Utils/Decoder/AdaptedPostboxUnkeyedDecodingContainer.swift
+@@ -31,11 +31,12 @@ extension _AdaptedPostboxDecoder {
+         let codingPath: [CodingKey]
+         let userInfo: [CodingUserInfoKey: Any]
+         let content: Content
+-        /// Set when the array bytes could not be split into elements. `Decoder.unkeyedContainer()`
+-        /// cannot throw, so the container is created anyway and every `decode` throws
++        /// Set when the array bytes could not be split into elements. Preserve the existing
++        /// behavior: the container is created anyway and every `decode` throws
+         /// `DecodingError.dataCorrupted`; `isAtEnd` stays false so `Array(from:)` reaches that throw
+         /// instead of returning an empty array.
+         let isCorrupted: Bool
++        let validateData: Bool
+ 
+         var count: Int? {
+             if self.isCorrupted {
+@@ -57,23 +58,40 @@ extension _AdaptedPostboxDecoder {
+             return self._currentIndex
+         }
+        
+-        init(data: Data, codingPath: [CodingKey], userInfo: [CodingUserInfoKey: Any], content: Content, isCorrupted: Bool = false) {
++        init(data: Data, codingPath: [CodingKey], userInfo: [CodingUserInfoKey: Any], content: Content, isCorrupted: Bool = false, validateData: Bool = false) {
+             self.codingPath = codingPath
+             self.userInfo = userInfo
+             self.content = content
+             self.isCorrupted = isCorrupted
++            self.validateData = validateData
+         }
+ 
+         fileprivate func throwIfCorrupted() throws {
+             if self.isCorrupted {
+                 throw DecodingError.dataCorrupted(DecodingError.Context(codingPath: self.codingPath, debugDescription: "Malformed object array"))
+             }
++            if self.validateData && self._currentIndex >= self.content.count {
++                throw DecodingError.dataCorrupted(.init(codingPath: self.codingPath, debugDescription: "Postbox array is exhausted"))
++            }
++        }
++
++        fileprivate func cast<T>(_ value: Any, to type: T.Type) throws -> T {
++            if self.validateData {
++                guard let result = value as? T else {
++                    throw DecodingError.typeMismatch(type, .init(codingPath: self.codingPath, debugDescription: "Unexpected Postbox array element type"))
++                }
++                return result
++            }
++            return value as! T
+         }
+     }
+ }
+ 
+ extension _AdaptedPostboxDecoder.UnkeyedContainer: UnkeyedDecodingContainer {
+     func decodeNil() throws -> Bool {
++        if self.validateData {
++            throw DecodingError.dataCorrupted(.init(codingPath: self.codingPath, debugDescription: "Postbox arrays do not contain nil"))
++        }
+         preconditionFailure()
+     }
+ 
+@@ -86,7 +104,7 @@ extension _AdaptedPostboxDecoder.UnkeyedContainer: UnkeyedDecodingContainer {
+                 self._currentIndex += 1
+                 return array[index] as! T
+             default:
+-                assertionFailure()
++                if !self.validateData { assertionFailure() }
+                 throw DecodingError.typeMismatch(Data.self, DecodingError.Context(codingPath: self.codingPath, debugDescription: ""))
+             }
+         } else {
+@@ -96,7 +114,7 @@ extension _AdaptedPostboxDecoder.UnkeyedContainer: UnkeyedDecodingContainer {
+                 self._currentIndex += 1
+ 
+                 let data = array[index]
+-                return try AdaptedPostboxDecoder().decode(T.self, from: data)
++                return try AdaptedPostboxDecoder(validateData: self.validateData).decode(T.self, from: data, contentType: .object)
+             case let .objectDict(dict):
+                 let index = self._currentIndex
+                 self._currentIndex += 1
+@@ -108,24 +126,24 @@ extension _AdaptedPostboxDecoder.UnkeyedContainer: UnkeyedDecodingContainer {
+                 } else {
+                     data = dataPair.1
+                 }
+-                return try AdaptedPostboxDecoder().decode(T.self, from: data)
++                return try AdaptedPostboxDecoder(validateData: self.validateData).decode(T.self, from: data, contentType: .object)
+             case let .int32Array(array):
+                 let index = self._currentIndex
+                 self._currentIndex += 1
+ 
+-                return array[index] as! T
++                return try self.cast(array[index], to: type)
+             case let .int64Array(array):
+                 let index = self._currentIndex
+                 self._currentIndex += 1
+ 
+-                return array[index] as! T
++                return try self.cast(array[index], to: type)
+             case let .stringArray(array):
+                 let index = self._currentIndex
+                 self._currentIndex += 1
+ 
+-                return array[index] as! T
++                return try self.cast(array[index], to: type)
+             default:
+-                assertionFailure()
++                if !self.validateData { assertionFailure() }
+                 throw DecodingError.typeMismatch(T.self, DecodingError.Context(codingPath: self.codingPath, debugDescription: ""))
+             }
+         }
+diff --git a/submodules/Postbox/Tests/PostboxFixture.swift b/submodules/Postbox/Tests/PostboxFixture.swift
+index c77fd5d122bbc3b5e49acbe0e525b3a1dc7119f5..e1ff97bab30e49eb547bdab696d1e241ed7508d3 100644
+--- a/submodules/Postbox/Tests/PostboxFixture.swift
++++ b/submodules/Postbox/Tests/PostboxFixture.swift
+@@ -37,10 +37,10 @@ final class PostboxFixture {
+         self.postbox = Postbox(
+             queue: queue,
+             basePath: basePath,
++            mediaBox: MediaBox(basePath: basePath + "/media", isMainProcess: true),
+             seedConfiguration: MessageHistoryTableFixture.makeSeedConfiguration(),
+             valueBox: valueBox!,
+             timestampForAbsoluteTimeBasedOperations: Int32(Date().timeIntervalSince1970),
+-            isMainProcess: true,
+             isTemporary: true,
+             tempDir: nil,
+             useCaches: true
+diff --git a/submodules/TelegramCore/BUILD b/submodules/TelegramCore/BUILD
+index d4ed7767a2606d67bebfb62f4f0699c423a22528..edbb0bfb7260b785853665c4439eb295a1f19bce 100644
+--- a/submodules/TelegramCore/BUILD
++++ b/submodules/TelegramCore/BUILD
+@@ -72,3 +72,28 @@ ios_unit_test(
+         "//visibility:public",
+     ],
+ )
++
++swift_library(
++    name = "DraftPocketTestsLib",
++    testonly = True,
++    srcs = ["Tests/DraftPocketTests.swift", "Tests/DraftPocketMediaLifecycleTests.swift"],
++    deps = [
++        ":TelegramCore",
++        "//submodules/Postbox:Postbox",
++        "//submodules/SSignalKit/SwiftSignalKit:SwiftSignalKit",
++    ],
++)
++
++ios_test_runner(
++    name = "DraftPocketTestRunner",
++    device_type = "iPhone 17",
++    os_version = "27.0",
++)
++
++ios_unit_test(
++    name = "DraftPocketTests",
++    minimum_os_version = "15.0",
++    runner = ":DraftPocketTestRunner",
++    deps = [":DraftPocketTestsLib"],
++    visibility = ["//visibility:public"],
++)
+diff --git a/submodules/TelegramCore/Sources/Account/Account.swift b/submodules/TelegramCore/Sources/Account/Account.swift
+index d38cbe5216128adaa87a6298f37e98b22235fc91..0baafa55a1b059561cb3eebad89b7edc5924f65b 100644
+--- a/submodules/TelegramCore/Sources/Account/Account.swift
++++ b/submodules/TelegramCore/Sources/Account/Account.swift
+@@ -1497,9 +1497,17 @@ public class Account {
+         
+         let pendingMessageManager = self.pendingMessageManager
+         Logger.shared.log("Account", "Begin watching unsent message ids")
+-        self.managedOperationsDisposable.add(postbox.unsentMessageIdsView().start(next: { [weak pendingMessageManager] view in
+-            pendingMessageManager?.updatePendingMessageIds(view.ids)
++        self.managedOperationsDisposable.add((postbox.unsentMessageIdsView()
++        |> mapToSignal { view in
++            return postbox.transaction { transaction in draftPocketAllowedPendingMessageIds(transaction: transaction, mediaBox: postbox.mediaBox, ids: view.ids) }
++        }).start(next: { [weak pendingMessageManager] ids in
++            pendingMessageManager?.updatePendingMessageIds(ids)
+         }))
++
++        // Reconcile successful/deleted/failed messages using the real Postbox history. A failed
++        // local message keeps ownership; deleting it eventually releases the last retained copy.
++        // Repeating also covers deleting a failed message which is already absent from unsentView.
++        self.managedOperationsDisposable.add(_internal_managedDraftPocketMediaCollection(postbox: postbox).start())
+         
+         self.managedOperationsDisposable.add(managedSecretChatOutgoingOperations(auxiliaryMethods: auxiliaryMethods, postbox: self.postbox, network: self.network, accountPeerId: peerId, mode: .all).start())
+         self.managedOperationsDisposable.add(managedCloudChatRemoveMessagesOperations(postbox: self.postbox, network: self.network, stateManager: self.stateManager).start())
+diff --git a/submodules/TelegramCore/Sources/Account/AccountManager.swift b/submodules/TelegramCore/Sources/Account/AccountManager.swift
+index bf9069805593a66603d84f434ac37c4e6c78f098..0cb49e3b9908e20cd600c2def63d2492153045cf 100644
+--- a/submodules/TelegramCore/Sources/Account/AccountManager.swift
++++ b/submodules/TelegramCore/Sources/Account/AccountManager.swift
+@@ -132,6 +132,7 @@ private var declaredEncodables: Void = {
+     declareEncodable(StickerPackItem.self, f: { StickerPackItem(decoder: $0) })
+     declareEncodable(LocalFileReferenceMediaResource.self, f: { LocalFileReferenceMediaResource(decoder: $0) })
+     declareEncodable(OutgoingMessageInfoAttribute.self, f: { OutgoingMessageInfoAttribute(decoder: $0) })
++    declareEncodable(DraftPocketSendRetentionAttribute.self, f: { DraftPocketSendRetentionAttribute(decoder: $0) })
+     declareEncodable(PendingWalletTransferMessageAttribute.self, f: { PendingWalletTransferMessageAttribute(decoder: $0) })
+     declareEncodable(EphemeralMessageAttribute.self, f: { EphemeralMessageAttribute(decoder: $0) })
+     declareEncodable(EphemeralReplacementMessageAttribute.self, f: { EphemeralReplacementMessageAttribute(decoder: $0) })
+diff --git a/submodules/TelegramCore/Sources/ChatInputContent/ChatInputContentCustomEmoji.swift b/submodules/TelegramCore/Sources/ChatInputContent/ChatInputContentCustomEmoji.swift
+index dfa4676117b644f1d036a7375656ce2f715b3ff0..0d372835c62281af724e1e4b27002ba04a530bf8 100644
+--- a/submodules/TelegramCore/Sources/ChatInputContent/ChatInputContentCustomEmoji.swift
++++ b/submodules/TelegramCore/Sources/ChatInputContent/ChatInputContentCustomEmoji.swift
+@@ -53,6 +53,29 @@ private func chatInputRunsCollectingUnresolvedCustomEmoji(_ runs: [ChatInputRun]
+ }
+ 
+ extension ChatInputContent {
++    /// Full file objects are stored alongside Draft Pocket's canonical model, whose codec
++    /// intentionally persists emoji ids only. Walk nested buttons and every block's runs.
++    func draftPocketCustomEmojiFiles() -> [Int64: TelegramMediaFile] {
++        var result: [Int64: TelegramMediaFile] = [:]
++        func collect(_ runs: [ChatInputRun]) {
++            for run in runs {
++                switch run.attributes.entity {
++                case let .customEmoji(fileId, file, _):
++                    if let file = file { result[fileId] = file }
++                case let .button(button):
++                    collect(button.label)
++                case .mention, .url, .date, .none:
++                    break
++                }
++            }
++        }
++        _ = self.mappingRuns { runs in
++            collect(runs)
++            return runs
++        }
++        return result
++    }
++
+     /// Rebuilds every block with its runs transformed. The `switch` is EXHAUSTIVE (no `default`) on
+     /// purpose: a new `ChatInputBlock` case must state where its runs live, rather than silently
+     /// carrying emoji that never resolve.
+diff --git a/submodules/TelegramCore/Sources/ChatInputContent/ChatInputContentModel.swift b/submodules/TelegramCore/Sources/ChatInputContent/ChatInputContentModel.swift
+index 37b78ddaef33b82d142e865f58886daabb2a7c46..dff1578c12e1a60dd11c67dea557563618d33f7c 100644
+--- a/submodules/TelegramCore/Sources/ChatInputContent/ChatInputContentModel.swift
++++ b/submodules/TelegramCore/Sources/ChatInputContent/ChatInputContentModel.swift
+@@ -1123,7 +1123,9 @@ public struct ChatInputTable: Equatable, Codable {
+ }
+ 
+ /// One step descending the block tree: pick a block at this level, then which of its nested-content slots to
+-/// descend into. `slot` is unused at the LEAF step (a text block has no nested content) — 0 by convention.
++/// descend into. The native composer uses slot 0 for primary text / container children, slot 1 for
++/// secondary text (language, author, title). A table step uses its row index as slot, followed by
++/// a terminal step whose blockIndex is the cell index within that row and whose slot is 0.
+ public struct ChatInputPathStep: Equatable {
+     public var blockIndex: Int
+     public var slot: Int
+@@ -1134,14 +1136,22 @@ public struct ChatInputPathStep: Equatable {
+ }
+ 
+ /// A caret position: a non-empty path of `(blockIndex, slot)` steps through the (possibly nested) block tree to
+-/// a UTF-16 `offset` within the addressed text-leaf block. Today the editor produces only depth-1 paths (the
+-/// flat string contains only top-level, unfolded content); deeper paths are reserved for future nested editing.
++/// a UTF-16 `offset` within the addressed text region. The native composer produces nested paths;
++/// flat-only consumers use `flatOffset` as a projection, never as a structural restore operation.
++public enum ChatInputPositionAffinity: Int32 {
++    case upstream = 0
++    case downstream = 1
++}
++
+ public struct ChatInputPosition: Equatable {
+     public var path: [ChatInputPathStep]
+     public var offset: Int
+-    public init(path: [ChatInputPathStep], offset: Int) {
++    /// nil is the backward-compatible default for drafts written before visual affinity was stored.
++    public var affinity: ChatInputPositionAffinity?
++    public init(path: [ChatInputPathStep], offset: Int, affinity: ChatInputPositionAffinity? = nil) {
+         self.path = path
+         self.offset = offset
++        self.affinity = affinity
+     }
+ }
+ 
+@@ -1152,7 +1162,7 @@ public struct ChatInputSelection: Equatable {
+         self.start = start
+         self.end = end
+     }
+-    public var isCollapsed: Bool { start == end }
++    public var isCollapsed: Bool { start.path == end.path && start.offset == end.offset }
+ }
+ 
+ public extension ChatInputContent {
+@@ -1190,15 +1200,17 @@ public extension ChatInputContent {
+         }
+     }
+ 
+-    /// Map a structural position to a flat UTF-16 offset into `plainText`. Only depth-1 positions (the editing
+-    /// surface today) round-trip exactly; a deeper path (into not-yet-unfolded nested content, which has no flat
+-    /// representation) clamps to the addressed top-level block's start. Off-axis (`.media`/`.table`) blocks
+-    /// contribute neither length nor a separator, so the flat space matches `plainText` exactly; a position that
+-    /// addresses an off-axis block (defensive — the editor never selects into one) clamps to that boundary.
++    /// Project a structural position onto `plainText`. Expanded quote children participate recursively.
++    /// Tables, details, media and secondary text regions are off this axis: their caret projects to
++    /// the end, matching the native editor's composerSelectedRange. Keep the structural value to restore it.
+     func flatOffset(for position: ChatInputPosition) -> Int {
+         guard let first = position.path.first else {
+             return 0
+         }
++        if position.path.count > 1 || first.slot != 0
++            || (self.blocks.indices.contains(first.blockIndex) && !self.blockIsFlatParticipating(self.blocks[first.blockIndex])) {
++            return self.flatOffsetForStructuralPosition(position) ?? (self.plainText as NSString).length
++        }
+         let count = self.blocks.count
+         if count == 0 {
+             return 0
+@@ -1228,6 +1240,28 @@ public extension ChatInputContent {
+         return flat
+     }
+ 
++    /// nil propagates an off-axis endpoint through every enclosing quote, so it projects to the
++    /// whole document's end rather than the end of whichever nested quote happened to contain it.
++    private func flatOffsetForStructuralPosition(_ position: ChatInputPosition) -> Int? {
++        guard let first = position.path.first, self.blocks.indices.contains(first.blockIndex), first.slot == 0 else { return nil }
++        let block = self.blocks[first.blockIndex]
++        guard self.blockIsFlatParticipating(block) else { return nil }
++        var prefix = 0
++        var hasEmitted = false
++        for previous in self.blocks.prefix(first.blockIndex) where self.blockIsFlatParticipating(previous) {
++            if hasEmitted { prefix += 1 }
++            prefix += self.blockFlatLength(previous)
++            hasEmitted = true
++        }
++        if hasEmitted { prefix += 1 }
++        if position.path.count == 1 {
++            return prefix + min(max(position.offset, 0), self.blockFlatLength(block))
++        }
++        guard case let .blockQuote(quote) = block, !quote.collapsed,
++              let inner = quote.content.flatOffsetForStructuralPosition(ChatInputPosition(path: Array(position.path.dropFirst()), offset: position.offset)) else { return nil }
++        return prefix + inner
++    }
++
+     /// Map a flat UTF-16 offset (into `plainText`) to a structural position. Always a depth-1 path — the flat
+     /// string only contains top-level, unfolded content. Off-axis (`.media`/`.table`) blocks are skipped (they
+     /// hold no flat position), so an offset never resolves INTO one; offsets straddling an inter-block "\n"
+diff --git a/submodules/TelegramCore/Sources/PendingMessages/EnqueueMessage.swift b/submodules/TelegramCore/Sources/PendingMessages/EnqueueMessage.swift
+index 9cb3108a8c8202f557dffa3828a72537f2e6197a..1f05da2aabd8635bd68a1e8ba1e58e4c49500421 100644
+--- a/submodules/TelegramCore/Sources/PendingMessages/EnqueueMessage.swift
++++ b/submodules/TelegramCore/Sources/PendingMessages/EnqueueMessage.swift
+@@ -280,6 +280,8 @@ private func convertForwardedMediaForSecretChat(_ media: Media) -> Media {
+ private func filterMessageAttributesForOutgoingMessage(_ attributes: [MessageAttribute]) -> [MessageAttribute] {
+     return attributes.filter { attribute in
+         switch attribute {
++        case _ as DraftPocketSendRetentionAttribute:
++            return true
+         case _ as TextEntitiesMessageAttribute:
+             return true
+         case _ as RichTextMessageAttribute:
+@@ -450,6 +452,8 @@ func forwardGroupingKey(grouping: EnqueueMessageGrouping, sourceGroupingKey: Int
+ private func filterMessageAttributesForEphemeralOutgoingMessage(_ attributes: [MessageAttribute]) -> [MessageAttribute] {
+     return attributes.filter { attribute in
+         switch attribute {
++        case _ as DraftPocketSendRetentionAttribute:
++            return true
+         case _ as TextEntitiesMessageAttribute:
+             return true
+         case _ as RichTextMessageAttribute:
+@@ -571,7 +575,7 @@ private func generateEphemeralOutgoingRandomId() -> Int64 {
+     }
+ }
+ 
+-private func enqueueEphemeralOutgoingMessage(transaction: Transaction, account: Account, peerId: PeerId, transformedMedia: Bool, message: EnqueueMessage, botPeerId: PeerId, isWelcomeTemplate: Bool = false) -> MessageId? {
++private func enqueueEphemeralOutgoingMessage(transaction: Transaction, account: Account, peerId: PeerId, transformedMedia: Bool, message: EnqueueMessage, botPeerId: PeerId, isWelcomeTemplate: Bool = false, draftMediaPreparation: DraftPocketMediaPreparation? = nil) -> MessageId? {
+     guard case let .message(text, requestedAttributes, inlineStickers, mediaReference, threadId, replyToMessageId, _, _, correlationId, bubbleUpEmojiOrStickersets) = message else {
+         return nil
+     }
+@@ -628,6 +632,11 @@ private func enqueueEphemeralOutgoingMessage(transaction: Transaction, account:
+         timestamp += 1
+     }
+     let storeMessage = StoreMessage(id: localId, customStableId: nil, globallyUniqueId: randomId, groupingKey: nil, threadId: threadId, timestamp: timestamp, flags: flags, tags: [], globalTags: [], localTags: [], forwardInfo: nil, authorId: isWelcomeTemplate ? peerId : account.peerId, text: text, attributes: attributes, media: mediaList)
++    do {
++        if let data = try draftPocketPendingOwnershipData(transaction: transaction, peerId: peerId, messages: [storeMessage], preparation: draftMediaPreparation) {
++            DraftPocketMediaOwnership.commitEncoded(data, transaction: transaction)
++        }
++    } catch { return nil }
+     let _ = transaction.addMessages([storeMessage], location: .Random)
+ 
+     return localId
+@@ -736,7 +745,15 @@ public func enqueueMessages(account: Account, peerId: PeerId, messages: [Enqueue
+     }
+     return signal
+     |> mapToSignal { messages -> Signal<[MessageId?], NoError> in
+-        return account.postbox.transaction { transaction -> ([MessageId?], [MessageId]) in
++        return _internal_prepareDraftPocketOutgoingMedia(postbox: account.postbox, peerId: peerId, messages: messages.map { $0.1 })
++        |> mapToSignal { prepared -> Signal<[MessageId?], NoError> in
++        guard case let .success(preparation) = prepared else { return .single(Array(repeating: nil, count: messages.count)) }
++        return account.postbox.transaction { transaction -> ([MessageId?], [MessageId], DraftPocketMediaPreparation?) in
++            // One recovery operation cannot be partially consumed by separate ephemeral/normal
++            // enqueue helpers. Reject this unsupported split before any message mutation.
++            if preparation != nil && messages.count > 1 && messages.contains(where: { ephemeralBotPeerIdForEnqueuedMessage(transaction: transaction, accountPeerId: account.peerId, message: $0.1) != nil }) {
++                return (Array(repeating: nil, count: messages.count), [], preparation)
++            }
+             var resultIds = Array<MessageId?>(repeating: nil, count: messages.count)
+             var ephemeralMessageIds: [MessageId] = []
+             var normalMessages: [(Bool, EnqueueMessage)] = []
+@@ -745,7 +762,7 @@ public func enqueueMessages(account: Account, peerId: PeerId, messages: [Enqueue
+             for i in 0 ..< messages.count {
+                 let (transformedMedia, message) = messages[i]
+                 if let botPeerId = ephemeralBotPeerIdForEnqueuedMessage(transaction: transaction, accountPeerId: account.peerId, message: message) {
+-                    if let messageId = enqueueEphemeralOutgoingMessage(transaction: transaction, account: account, peerId: peerId, transformedMedia: transformedMedia, message: message, botPeerId: botPeerId) {
++                    if let messageId = enqueueEphemeralOutgoingMessage(transaction: transaction, account: account, peerId: peerId, transformedMedia: transformedMedia, message: message, botPeerId: botPeerId, draftMediaPreparation: preparation) {
+                         resultIds[i] = messageId
+                         ephemeralMessageIds.append(messageId)
+                     }
+@@ -756,20 +773,22 @@ public func enqueueMessages(account: Account, peerId: PeerId, messages: [Enqueue
+             }
+ 
+             if !normalMessages.isEmpty {
+-                let normalIds = enqueueMessages(transaction: transaction, account: account, peerId: peerId, messages: normalMessages)
++                let normalIds = enqueueMessages(transaction: transaction, account: account, peerId: peerId, messages: normalMessages, draftMediaPreparation: preparation)
+                 for i in 0 ..< min(normalIds.count, normalMessageIndices.count) {
+                     resultIds[normalMessageIndices[i]] = normalIds[i]
+                 }
+             }
+ 
+-            return (resultIds, ephemeralMessageIds)
++            return (resultIds, ephemeralMessageIds, preparation)
+         }
+-        |> map { resultIds, ephemeralMessageIds -> [MessageId?] in
++        |> map { resultIds, ephemeralMessageIds, preparation -> [MessageId?] in
++            preparation?.session.finish()
+             for messageId in ephemeralMessageIds {
+                 let _ = _internal_sendEphemeralOutgoingMessage(account: account, messageId: messageId).startStandalone()
+             }
+             return resultIds
+         }
++        }
+     }
+ }
+ 
+@@ -807,6 +826,7 @@ public func resendMessages(account: Account, messageIds: [MessageId]) -> Signal<
+     return account.postbox.transaction { transaction -> Void in
+         var removeMessageIds: [MessageId] = []
+         for (peerId, ids) in messagesIdsGroupedByPeerId(messageIds) {
++            var successfullyPreparedSourceIds: [MessageId] = []
+             var sendPaidMessageStars: StarsAmount?
+             let peer = transaction.getPeer(peerId)
+             if let user = peer as? TelegramUser, user.flags.contains(.requireStars) {
+@@ -823,7 +843,7 @@ public func resendMessages(account: Account, messageIds: [MessageId]) -> Signal<
+             var messages: [EnqueueMessage] = []
+             for id in ids {
+                 if let message = transaction.getMessage(id), !message.flags.contains(.Incoming) {
+-                    removeMessageIds.append(id)
++                    successfullyPreparedSourceIds.append(id)
+                     
+                     var filteredAttributes: [MessageAttribute] = []
+                     var replyToMessageId: EngineMessageReplySubject?
+@@ -856,13 +876,16 @@ public func resendMessages(account: Account, messageIds: [MessageId]) -> Signal<
+                     }
+                 }
+             }
+-            let _ = enqueueMessages(transaction: transaction, account: account, peerId: peerId, messages: messages.map { (false, $0) })
++            let newIds = enqueueMessages(transaction: transaction, account: account, peerId: peerId, messages: messages.map { (false, $0) }, draftMediaRetrySourceIds: Set(successfullyPreparedSourceIds))
++            if newIds.count == messages.count && newIds.allSatisfy({ $0 != nil }) {
++                removeMessageIds.append(contentsOf: successfullyPreparedSourceIds)
++            }
+         }
+         _internal_deleteMessages(transaction: transaction, mediaBox: account.postbox.mediaBox, ids: removeMessageIds, deleteMedia: false)
+     }
+ }
+ 
+-func enqueueMessages(transaction: Transaction, account: Account, peerId: PeerId, messages: [(Bool, EnqueueMessage)], disableAutoremove: Bool = false, transformGroupingKeysWithPeerId: Bool = false) -> [MessageId?] {
++func enqueueMessages(transaction: Transaction, account: Account, peerId: PeerId, messages: [(Bool, EnqueueMessage)], draftMediaPreparation: DraftPocketMediaPreparation? = nil, draftMediaRetrySourceIds: Set<MessageId> = [], disableAutoremove: Bool = false, transformGroupingKeysWithPeerId: Bool = false) -> [MessageId?] {
+     /**
+      * If it is a support account, mark messages as read here as they are
+      * not marked as read when chat is opened.
+@@ -1505,6 +1528,14 @@ func enqueueMessages(transaction: Transaction, account: Account, peerId: PeerId,
+                 }
+             }
+             
++            let retainedOwnershipData: Data?
++            do {
++                retainedOwnershipData = try draftPocketPendingOwnershipData(transaction: transaction, peerId: peerId, messages: storeMessages, preparation: draftMediaPreparation, retryingMessageIds: draftMediaRetrySourceIds)
++            } catch {
++                // No outgoing message or active draft is changed when byte retention cannot be proved.
++                return []
++            }
++            if let data = retainedOwnershipData { DraftPocketMediaOwnership.commitEncoded(data, transaction: transaction) }
+             let globallyUniqueIdToMessageId = transaction.addMessages(storeMessages, location: .Random)
+             for globallyUniqueId in globallyUniqueIds {
+                 messageIds.append(globallyUniqueIdToMessageId[globallyUniqueId])
+diff --git a/submodules/TelegramCore/Sources/SyncCore/SyncCore_Namespaces.swift b/submodules/TelegramCore/Sources/SyncCore/SyncCore_Namespaces.swift
+index 50e467d603edb3718f5bddd6cb024a61eca9e910..6d65b65f8c2b3fbbbe52833d19c835e29461e614 100644
+--- a/submodules/TelegramCore/Sources/SyncCore/SyncCore_Namespaces.swift
++++ b/submodules/TelegramCore/Sources/SyncCore/SyncCore_Namespaces.swift
+@@ -353,6 +353,8 @@ private enum PreferencesKeyValues: Int32 {
+     case webBrowserSettings = 49
+     case communitiesState = 50
+     case unreadCounterTagsState = 51
++    case draftPocket = 52
++    case draftPocketMediaOwnership = 53
+ }
+ 
+ public func applicationSpecificPreferencesKey(_ value: Int32) -> ValueBoxKey {
+@@ -368,6 +370,23 @@ public func applicationSpecificSharedDataKey(_ value: Int32) -> ValueBoxKey {
+ }
+ 
+ public struct PreferencesKeys {
++    /// Account scoping is provided by the owning Postbox. Presence is separate from the
++    /// thread value, so a nil thread and thread zero never alias.
++    static var draftPocketMediaOwnership: ValueBoxKey {
++        let key = ValueBoxKey(length: 4)
++        key.setInt32(0, value: PreferencesKeyValues.draftPocketMediaOwnership.rawValue)
++        return key
++    }
++
++    static func draftPocket(peerId: PeerId, threadId: Int64?) -> ValueBoxKey {
++        let key = ValueBoxKey(length: 4 + 8 + 4 + 8)
++        key.setInt32(0, value: PreferencesKeyValues.draftPocket.rawValue)
++        key.setInt64(4, value: peerId.toInt64())
++        key.setInt32(12, value: threadId == nil ? 0 : 1)
++        key.setInt64(16, value: threadId ?? 0)
++        return key
++    }
++
+     public static let globalNotifications: ValueBoxKey = {
+         let key = ValueBoxKey(length: 4)
+         key.setInt32(0, value: PreferencesKeyValues.globalNotifications.rawValue)
+diff --git a/submodules/TelegramCore/Sources/TelegramEngine/Peers/TelegramEnginePeers.swift b/submodules/TelegramCore/Sources/TelegramEngine/Peers/TelegramEnginePeers.swift
+index 7cfe8c208fa36a82ee67bd8b00fcec8fb02611c5..1260c2692633d8f861452375588f8ecc9508c73b 100644
+--- a/submodules/TelegramCore/Sources/TelegramEngine/Peers/TelegramEnginePeers.swift
++++ b/submodules/TelegramCore/Sources/TelegramEngine/Peers/TelegramEnginePeers.swift
+@@ -1174,72 +1174,37 @@ public extension TelegramEngine {
+             }
+         }
+ 
+-        public func setOpaqueChatInterfaceState(peerId: PeerId, threadId: Int64?, state: OpaqueChatInterfaceState) -> Signal<Never, NoError> {
+-            return self.account.postbox.transaction { transaction -> Void in
+-                guard let data = try? AdaptedPostboxEncoder().encode(InternalChatInterfaceState(
+-                    synchronizeableInputState: state.synchronizeableInputState,
+-                    historyScrollMessageIndex: state.historyScrollMessageIndex,
+-                    mediaDraftState: state.mediaDraftState,
+-                    opaqueData: state.opaqueData
+-                )) else {
+-                    return
+-                }
++        public func draftPocket(peerId: EnginePeer.Id, threadId: Int64?) -> Signal<DraftPocketView, NoError> {
++            return _internal_draftPocket(postbox: self.account.postbox, peerId: peerId, threadId: threadId)
++        }
+ 
+-                #if DEBUG
+-                let _ = try! AdaptedPostboxDecoder().decode(InternalChatInterfaceState.self, from: data)
+-                #endif
+-                
+-                var overrideChatTimestamp: Int32?
+-                if let inputState = state.synchronizeableInputState {
+-                    overrideChatTimestamp = inputState.timestamp
+-                }
+-                
+-                if let mediaDraftState = state.mediaDraftState {
+-                    if let current = overrideChatTimestamp, mediaDraftState.timestamp < current {
+-                    } else {
+-                        overrideChatTimestamp = mediaDraftState.timestamp
+-                    }
+-                }
++        public func observeDraftPocket(peerId: EnginePeer.Id, threadId: Int64?) -> Signal<DraftPocketView, NoError> {
++            return _internal_observeDraftPocket(postbox: self.account.postbox, peerId: peerId, threadId: threadId)
++        }
+ 
+-                let storedState = StoredPeerChatInterfaceState(
+-                    overrideChatTimestamp: overrideChatTimestamp,
+-                    historyScrollMessageIndex: state.historyScrollMessageIndex,
+-                    associatedMessageIds: (state.synchronizeableInputState?.replySubject?.messageId).flatMap({ [$0] }) ?? [],
+-                    data: data
+-                )
++        public func updateDraftPocket(peerId: EnginePeer.Id, threadId: Int64?, expectedRevision: Int64, expectedActiveState: Data?, operation: DraftPocketOperation) -> Signal<DraftPocketResult, NoError> {
++            return _internal_updateDraftPocketRetainingMedia(postbox: self.account.postbox, peerId: peerId, threadId: threadId, expectedRevision: expectedRevision, expectedActiveState: expectedActiveState, operation: operation)
++        }
+ 
+-                if let threadId = threadId {
+-                    var currentInputState: SynchronizeableChatInputState?
+-                    if let peerChatInterfaceState = transaction.getPeerChatThreadInterfaceState(peerId, threadId: threadId), let data = peerChatInterfaceState.data {
+-                        currentInputState = (try? AdaptedPostboxDecoder().decode(InternalChatInterfaceState.self, from: data))?.synchronizeableInputState
+-                    }
+-                    let updatedInputState = state.synchronizeableInputState
++        public func prepareDraftPocketSend(peerId: PeerId, threadId: Int64?, snapshot: DraftPocketSnapshot) -> Signal<DraftPocketSendPreparationResult, NoError> {
++            return _internal_prepareDraftPocketSend(postbox: self.account.postbox, peerId: peerId, threadId: threadId, snapshot: snapshot)
++        }
+ 
+-                    if currentInputState != updatedInputState {
+-                        if peerId.namespace == Namespaces.Peer.CloudUser || peerId.namespace == Namespaces.Peer.CloudChannel || peerId.namespace == Namespaces.Peer.CloudGroup {
+-                            addSynchronizeChatInputStateOperation(transaction: transaction, peerId: peerId, threadId: threadId)
+-                        }
+-                    }
+-                    transaction.setPeerChatThreadInterfaceState(peerId, threadId: threadId, state: storedState)
+-                } else {
+-                    var currentInputState: SynchronizeableChatInputState?
+-                    if let peerChatInterfaceState = transaction.getPeerChatInterfaceState(peerId), let data = peerChatInterfaceState.data {
+-                        currentInputState = (try? AdaptedPostboxDecoder().decode(InternalChatInterfaceState.self, from: data))?.synchronizeableInputState
+-                    }
+-                    let updatedInputState = state.synchronizeableInputState
++        public func draftPocketSendRequiresRetention(peerId: PeerId, threadId: Int64?, resourceIds: [String]?) -> Signal<Result<Bool, DraftPocketError>, NoError> {
++            return _internal_draftPocketSendRequiresRetention(postbox: self.account.postbox, peerId: peerId, threadId: threadId, resourceIds: resourceIds)
++        }
+ 
+-                    if currentInputState != updatedInputState {
+-                        if peerId.namespace == Namespaces.Peer.CloudUser || peerId.namespace == Namespaces.Peer.CloudChannel || peerId.namespace == Namespaces.Peer.CloudGroup {
+-                            addSynchronizeChatInputStateOperation(transaction: transaction, peerId: peerId, threadId: nil)
+-                        }
+-                    }
+-                    transaction.setPeerChatInterfaceState(
+-                        peerId,
+-                        state: storedState
+-                    )
+-                }
++        public func recoverDraftPocketSend(operationId: String, expectedRevision: Int64) -> Signal<DraftPocketResult, NoError> {
++            return _internal_recoverDraftPocketSend(postbox: self.account.postbox, operationId: operationId, expectedRevision: expectedRevision)
++        }
++
++        public func setOpaqueChatInterfaceState(peerId: PeerId, threadId: Int64?, state: OpaqueChatInterfaceState, retainedDraftResourceIds: [String]? = nil) -> Signal<Never, NoError> {
++            return self.account.postbox.transaction { transaction -> Bool in
++                return _internal_setOpaqueChatInterfaceState(transaction: transaction, peerId: peerId, threadId: threadId, state: state, retainedDraftResourceIds: retainedDraftResourceIds)
++            }
++            |> mapToSignal { changed -> Signal<Never, NoError> in
++                return changed ? (_internal_collectDraftPocketMedia(postbox: self.account.postbox) |> ignoreValues) : .complete()
+             }
+-            |> ignoreValues
+         }
+         
+         public func getPerstistentChatInterfaceState(peerId: EnginePeer.Id) -> Signal<CodableEntry?, NoError> {
+diff --git a/submodules/TelegramCore/Sources/Utils/Coding.swift b/submodules/TelegramCore/Sources/Utils/Coding.swift
+index e6770f323f75b7f971c7e495c2c8603d0bf82b2b..e5b1bcbebe97f5a924c1cf898d96edab17a6d359 100644
+--- a/submodules/TelegramCore/Sources/Utils/Coding.swift
++++ b/submodules/TelegramCore/Sources/Utils/Coding.swift
+@@ -11,4 +11,10 @@ public final class EngineDecoder {
+     public static func decode<T>(_ type: T.Type, from data: Data) throws -> T where T : Decodable {
+         return try AdaptedPostboxDecoder().decode(type, from: data)
+     }
++
++    /// Opt-in for locally owned recovery records. Ordinary state decoding keeps
++    /// its existing behavior and does not pay for a framing validation pass.
++    public static func decodeValidated<T>(_ type: T.Type, from data: Data) throws -> T where T : Decodable {
++        return try AdaptedPostboxDecoder(validateData: true).decode(type, from: data)
++    }
+ }
+diff --git a/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/ChatRichTextInputNode.swift b/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/ChatRichTextInputNode.swift
+index 87f1a5429faed2a539061708ec86b9ec3d389301..ded215336b36c82af6d56905aebea77f55872b23 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/ChatRichTextInputNode.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatInputTextNode/Sources/ChatRichTextInputNode.swift
+@@ -379,6 +379,14 @@ public protocol ChatRichTextInputNode: AnyObject {
+     /// The node's content as the canonical `ChatInputContent` model + opaque selection. Default
+     /// implementations bridge through `attributedText`/`selectedRange` + the TextFormat conversion utility.
+     func currentInputContent() -> (content: ChatInputContent, selection: ChatInputSelection)
++
++    /// Whether currentInputContent can preserve the live selection exactly. Destructive transfers
++    /// must check this before capturing: a structural table/atom selection is not a text range.
++    var supportsExactInputSelection: Bool { get }
++    func canRestoreInputSelection(_ selection: ChatInputSelection, in content: ChatInputContent) -> Bool
++    /// Explicit external restoration after a committed transfer. Unlike ordinary state echoes,
++    /// this deliberately restores a caret even when the same body currently has a live range.
++    func restoreInputContent(_ content: ChatInputContent, selection: ChatInputSelection)
+     func setInputContent(_ content: ChatInputContent, selection: ChatInputSelection)
+ 
+     /// Runs `body` — the USER's edit made through the chat rather than the editor: a transform of the
+@@ -450,6 +458,16 @@ public protocol ChatRichTextInputNode: AnyObject {
+ }
+ 
+ public extension ChatRichTextInputNode {
++    var supportsExactInputSelection: Bool { true }
++    func canRestoreInputSelection(_ selection: ChatInputSelection, in content: ChatInputContent) -> Bool {
++        // A plain field cannot accept a native-only card and flatten its structure during restore.
++        guard chatInputContent(from: attributedString(from: content)) == content else { return false }
++        return ChatInputSelection(nsRange: selection.nsRange(in: content), in: content) == selection
++    }
++    func restoreInputContent(_ content: ChatInputContent, selection: ChatInputSelection) {
++        self.setInputContent(content, selection: selection)
++    }
++
+     var inputContentIsEmpty: Bool {
+         return (self.attributedText?.length ?? 0) == 0
+     }
+diff --git a/submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer/BUILD b/submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer/BUILD
+index b98bcaec134ba38bbd539e2f029c61aa8d00463e..fc133c122c7e4c62583ebe6888ee920509204782 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer/BUILD
++++ b/submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer/BUILD
+@@ -86,3 +86,18 @@ ios_unit_test(
+         "//visibility:public",
+     ],
+ )
++
++ios_test_runner(
++    name = "DraftPocketSelectionBridgeTestRunner",
++    device_type = "iPhone 17",
++    os_version = "27.0",
++)
++
++ios_unit_test(
++    name = "DraftPocketSelectionBridgeTests",
++    linkopts = ["-framework", "MediaPlayer"],
++    minimum_os_version = "15.0",
++    runner = ":DraftPocketSelectionBridgeTestRunner",
++    deps = [":ChatRichTextEditorComposerTestsLib"],
++    visibility = ["//visibility:public"],
++)
+diff --git a/submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer/Sources/RichTextEditorChatInputNode.swift b/submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer/Sources/RichTextEditorChatInputNode.swift
+index 7d7964402584c428a8638a7b87c10b7b8509855e..e5ea3a3520946a8e471a3c7e61d27108a3ad9e85 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer/Sources/RichTextEditorChatInputNode.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer/Sources/RichTextEditorChatInputNode.swift
+@@ -523,18 +523,65 @@ public final class RichTextEditorChatInputNode: ASDisplayNode, ChatRichTextInput
+     /// (`chatInputContent(fromDocument:)`), bypassing the lossy `Document → NSAttributedString` hop the default
+     /// protocol implementation (and the legacy `attributedText` getter) take. The resolvers map the editor's
+     /// opaque host keys to concrete chat-layer values: an unresolvable emoji degrades to plain text and an
+-    /// unresolvable medium is dropped (see `resolveEmojiRef`/`resolveMediaID`). The selection rides the editor's
+-    /// flat composer coordinate space (`selectedRange`), mapped into the content's structural selection — the
+-    /// same mapping the default implementation uses.
++    /// unresolvable medium is dropped (see `resolveEmojiRef`/`resolveMediaID`). Text selection is read in
++    /// Document coordinates so table cells and secondary regions never pass through the flat axis.
+     public func currentInputContent() -> (content: ChatInputContent, selection: ChatInputSelection) {
++        let document = self.editorView.document
+         let content = chatInputContent(
+-            fromDocument: self.editorView.document,
++            fromDocument: document,
+             resolveEmoji: { [weak self] emojiRef in self?.resolveEmojiRef(emojiRef) ?? nil },
+             resolveMedia: { [weak self] mediaID in self?.resolveMediaID(mediaID) ?? nil }
+         )
++        if let nativeSelection = self.editorView.documentTextSelection,
++           let selection = chatInputSelection(from: nativeSelection, document: document, content: content) {
++            return (content, selection)
++        }
++        // Flat consumers still need a display range for non-text selections. Transfers must check
++        // supportsExactInputSelection first; this compatibility value is not a persistence claim.
+         return (content, ChatInputSelection(nsRange: self.selectedRange, in: content))
+     }
+ 
++    public var supportsExactInputSelection: Bool {
++        guard let selection = self.editorView.documentTextSelection else { return false }
++        let document = self.editorView.document
++        let content = chatInputContent(fromDocument: document,
++                                       resolveEmoji: { [weak self] in self?.resolveEmojiRef($0) },
++                                       resolveMedia: { [weak self] in self?.resolveMediaID($0) })
++        return chatInputSelection(from: selection, document: document, content: content) != nil
++    }
++
++    public func canRestoreInputSelection(_ selection: ChatInputSelection, in content: ChatInputContent) -> Bool {
++        let document = document(fromChatInputContent: content,
++                                registerEmoji: { id, _ in EmojiRef(id: String(id), instanceID: BlockID.generate().rawValue, altText: nil) },
++                                registerMedia: { _ in "selection-validation" })
++        if let native = documentTextSelection(from: selection, document: document, content: content) {
++            let tree = DocumentTree.build(from: document)
++            guard let start = PositionResolver.globalPosition(of: native.start.ref, offset: native.start.offset, in: tree),
++                  let end = PositionResolver.globalPosition(of: native.end.ref, offset: native.end.offset, in: tree) else { return false }
++            if #available(iOS 18.4, *), self.editorView is RichTextEngineEditorView {
++                guard start <= end else { return false }
++            } else if native.start.affinity == .upstream || native.end.affinity == .upstream {
++                return false
++            }
++            return true
++        }
++        return content.blocks.isEmpty && isLegacyFlatInputSelection(selection, content: content)
++    }
++
++    public func restoreInputContent(_ content: ChatInputContent, selection: ChatInputSelection) {
++        guard self.canRestoreInputSelection(selection, in: content) else { return }
++        self.setInputContent(content, selection: selection)
++        self.restoreInputSelection(selection, content: content)
++    }
++
++    private func restoreInputSelection(_ selection: ChatInputSelection, content: ChatInputContent) {
++        if let native = documentTextSelection(from: selection, document: self.editorView.document, content: content) {
++            _ = self.editorView.setDocumentTextSelection(native)
++        } else if isLegacyFlatInputSelection(selection, content: content) {
++            self.selectedRange = selection.nsRange(in: content)
++        }
++    }
++
+     /// Replace the editor's content from a `ChatInputContent`. This is the chat layer's structural SET path
+     /// (draft restore, send-clear, spoiler re-decorate): it MUST land the structural blocks back into the editor
+     /// `Document`, so we convert STRAIGHT via the direct bridge (`document(fromChatInputContent:)`) rather than
+@@ -544,7 +591,7 @@ public final class RichTextEditorChatInputNode: ASDisplayNode, ChatRichTextInput
+     /// can resolve it back. Sets the editor's live document directly (NOT via `attributedText`, which would
+     /// flatten structure beyond the `ChatTextInputAttributes` vocabulary, e.g. tables) and runs the same refresh
+     /// `onChange` performs (so the panel re-lays-out and re-reads content), preserving the refresh/`didUpdateText`
+-    /// ordering, then restores the flat composer selection.
++    /// ordering, then restores the structural text selection.
+     /// **Whose caret is it?** While the editor has focus, the editor's — and a content-equal
+     /// `setInputContent` may not move it.
+     ///
+@@ -643,10 +690,9 @@ public final class RichTextEditorChatInputNode: ASDisplayNode, ChatRichTextInput
+         // only move the caret if the requested selection actually differs from the live one — so the common
+         // no-op echo (the editor's own edit pushed up and applied back) leaves scroll AND selection
+         // untouched, while a deliberate programmatic caret move still takes effect.
+-        let currentContent = self.currentInputContent().content
++        let current = self.currentInputContent()
++        let currentContent = current.content
+         if currentContent == content {
+-            let targetRange = selection.nsRange(in: content)
+-            let liveRange = self.editorView.composerSelectedRange
+             // STALE-SELECTION GUARD (the double-tap "flash then deselect" fix).
+             //
+             // The editor reports a selection change to the host ASYNCHRONOUSLY (coalesced to the next runloop
+@@ -662,10 +708,12 @@ public final class RichTextEditorChatInputNode: ASDisplayNode, ChatRichTextInput
+             // echo — a real edit changes content (→ the rebuild branch below), and a deliberate caret move goes
+             // through the editor first (so `liveRange` is already that caret). Skip it and keep the live range;
+             // every other move (including the unfocused/programmatic caret set) still applies.
+-            if Self.echoedSelectionShouldApply(target: targetRange,
+-                                               live: liveRange,
+-                                               editorHasFocus: self.editorView.isFirstResponder) {
+-                self.selectedRange = targetRange
++            // The same echo rule on structural endpoints: two distinct off-axis carets can have
++            // an identical flat NSRange, so comparing that range would suppress a real restore.
++            if selection != current.selection,
++               !self.editorView.isEditorFirstResponder,
++               !(selection.isCollapsed && !current.selection.isCollapsed) {
++                self.restoreInputSelection(selection, content: content)
+             }
+             return
+         }
+@@ -702,7 +750,7 @@ public final class RichTextEditorChatInputNode: ASDisplayNode, ChatRichTextInput
+             _ = self.editorView.update(size: self.editorView.bounds.size, insets: self.trackedInsets, contentMargins: self.trackedContentMargins, scrollIndicatorInsets: self.trackedScrollIndicatorInsets)
+         }
+         self.storedDelegate?.chatInputTextNodeDidUpdateText()
+-        self.selectedRange = selection.nsRange(in: content)
++        self.restoreInputSelection(selection, content: content)
+         // A set the editor NORMALISES is reported back, so the chat's copy — what Send reads — is what the
+         // editor shows. BY CONSTRUCTION, not by a list: whenever the read-back after the set differs from the
+         // content set, the editor changed something on the way in — a line break in a one-line field
+diff --git a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
+index ec2bc5949ced102330c2cc1a58a5b4bec1ff3ec1..6ba8b735835db1fa58a1253ecdc66c77db7025bc 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
+@@ -293,6 +293,91 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
+     private var useInputDecEngineEditor: Bool = false
+     
+     public var displayAttachmentMenu: () -> Void = { }
++    public var displayDraftPocket: (() -> Void)?
++    public let draftPocketButton = UIButton(type: .system)
++    public var draftPocketCount: Int = 0 {
++        didSet { self.updateDraftPocketButton() }
++    }
++
++    private func updateDraftPocketButton() {
++        guard let strings = self.strings else { return }
++        let text = DraftPocketStrings(strings)
++        self.draftPocketButton.setImage(UIImage(systemName: "tray"), for: .normal)
++        self.draftPocketButton.setTitle(self.draftPocketCount == 0 ? nil : " \(self.draftPocketCount)", for: .normal)
++        self.draftPocketButton.accessibilityLabel = text.title
++        self.draftPocketButton.accessibilityValue = "\(self.draftPocketCount)"
++        self.draftPocketButton.accessibilityHint = text.localOnly
++        self.draftPocketButton.accessibilityIdentifier = "DraftPocket.Open"
++    }
++
++    @objc private func draftPocketPressed() {
++        self.displayDraftPocket?()
++    }
++
++    /// Refuse to capture an in-progress IME composition. Resigning it would commit a different draft.
++    public var draftPocketHasMarkedText: Bool {
++        func hasMarkedText(_ view: UIView) -> Bool {
++            if let input = view as? UITextInput, input.markedTextRange != nil { return true }
++            return view.subviews.contains(where: hasMarkedText)
++        }
++        return hasMarkedText(self.view)
++    }
++
++    public func setDraftPocketInteractionLocked(_ locked: Bool) {
++        self.view.isUserInteractionEnabled = !locked
++        if locked { self.ensureUnfocused() }
++    }
++
++    private var draftPocketTransferSnapshot: UIView?
++
++    public func prepareDraftPocketTransfer() {
++        self.cancelDraftPocketTransfer()
++        guard !UIAccessibility.isReduceMotionEnabled,
++              let snapshot = self.textInputContainerBackgroundView.snapshotView(afterScreenUpdates: false) else { return }
++        snapshot.frame = self.textInputContainerBackgroundView.convert(self.textInputContainerBackgroundView.bounds, to: self.view)
++        snapshot.isUserInteractionEnabled = false
++        snapshot.isAccessibilityElement = false
++        self.draftPocketTransferSnapshot = snapshot
++    }
++
++    public func cancelDraftPocketTransfer() {
++        self.draftPocketTransferSnapshot?.layer.removeAllAnimations()
++        self.draftPocketTransferSnapshot?.removeFromSuperview()
++        self.draftPocketTransferSnapshot = nil
++    }
++
++    /// Only a committed transfer calls this. The snapshot is visual and never a restore payload.
++    public func animateDraftPocketTransfer(restoring: Bool) {
++        self.draftPocketButton.layer.removeAllAnimations()
++        if UIAccessibility.isReduceMotionEnabled {
++            self.cancelDraftPocketTransfer()
++            self.draftPocketButton.layer.animateAlpha(from: 0.4, to: 1.0, duration: 0.15)
++        } else {
++            if restoring {
++                self.prepareDraftPocketTransfer()
++            }
++            if let snapshot = self.draftPocketTransferSnapshot {
++                let expandedFrame = snapshot.frame
++                let pocketFrame = self.draftPocketButton.convert(self.draftPocketButton.bounds, to: self.view)
++                let foldedScale = CGAffineTransform(scaleX: max(0.04, pocketFrame.width / max(1.0, expandedFrame.width)), y: 0.16)
++                self.view.addSubview(snapshot)
++                if restoring {
++                    snapshot.center = CGPoint(x: pocketFrame.midX, y: pocketFrame.midY)
++                    snapshot.transform = foldedScale
++                    snapshot.alpha = 0.25
++                }
++                UIView.animate(withDuration: 0.28, delay: 0.0, usingSpringWithDamping: 0.94, initialSpringVelocity: 0.0, options: [.beginFromCurrentState, .allowUserInteraction], animations: {
++                    snapshot.center = restoring ? CGPoint(x: expandedFrame.midX, y: expandedFrame.midY) : CGPoint(x: pocketFrame.midX, y: pocketFrame.midY)
++                    snapshot.transform = restoring ? .identity : foldedScale
++                    snapshot.alpha = restoring ? 1.0 : 0.0
++                }, completion: { [weak self, weak snapshot] _ in
++                    snapshot?.removeFromSuperview()
++                    if self?.draftPocketTransferSnapshot === snapshot { self?.draftPocketTransferSnapshot = nil }
++                })
++            }
++        }
++        self.hapticFeedback.tap()
++    }
+     public var sendMessage: () -> Void = { }
+     public var paste: (ChatTextInputPanelPasteData) -> Void = { _ in }
+     public var updateHeight: (Bool) -> Void = { _ in }
+@@ -339,7 +424,10 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
+             // so this is identical to the former `attributedString(from:)` round-trip (the conversion is round-trip
+             // identity for flat content); `ChatTextInputState.==` is value-based so the freshly-built content doesn't
+             // churn change-detection. This is the "no NSAttributedString storage in the pipeline" boundary.
+-            return ChatTextInputState(content: richTextInputNode.currentInputContent().content, selectionRange: selectionRange)
++            let current = richTextInputNode.currentInputContent()
++            var state = ChatTextInputState(content: current.content, selectionRange: selectionRange)
++            state.selection = current.selection
++            return state
+         } else {
+             return ChatTextInputState()
+         }
+@@ -1018,6 +1106,10 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
+         
+         self.glassBackgroundContainer.contentView.addSubview(self.menuButton.view)
+         self.glassBackgroundContainer.contentView.addSubview(self.attachmentButtonBackground)
++        self.glassBackgroundContainer.contentView.addSubview(self.draftPocketButton)
++        self.draftPocketButton.addTarget(self, action: #selector(self.draftPocketPressed), for: .touchUpInside)
++        self.draftPocketButton.titleLabel?.font = UIFont.preferredFont(forTextStyle: .caption1)
++        self.draftPocketButton.titleLabel?.adjustsFontForContentSizeCategory = true
+         self.glassBackgroundContainer.contentView.addSubview(self.attachmentButtonDisabledNode.view)
+         
+         self.glassBackgroundContainer.contentView.addSubview(self.startButton.view)
+@@ -1483,6 +1575,9 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
+                 insets.left += 40.0 + 6.0
+             }
+         }
++        if self.displayDraftPocket != nil {
++            insets.left += 44.0
++        }
+         return insets
+     }
+     
+@@ -2012,6 +2107,7 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
+                 richTextInputNode.decorateAfterTextChange(context: context, baseFontSize: chatTextInputBaseFontSize(for: interfaceState.fontSize), textColor: interfaceState.theme.chat.inputPanel.inputTextColor, primaryTextColor: interfaceState.theme.chat.inputPanel.primaryTextColor, accentTextColor: interfaceState.theme.chat.inputPanel.panelControlAccentColor, spoilersRevealed: richTextInputNode.spoilersRevealed, fullTranslucency: fullTranslucency, availableEmojis: (self.context?.animatedEmojiStickersValue.keys).flatMap(Set.init) ?? Set(), emojiViewProvider: self.emojiViewProvider)
+             }
+             if self.theme !== interfaceState.theme {
++                self.cancelDraftPocketTransfer()
+                 updateSendButtonIcon = true
+                 
+                 if self.theme == nil || !self.theme!.chat.inputPanel.inputTextColor.isEqual(interfaceState.theme.chat.inputPanel.inputTextColor) {
+@@ -3581,6 +3677,12 @@ public class ChatTextInputPanelNode: ChatInputPanelNode, ASEditableTextNodeDeleg
+ 
+         let attachmentButtonFrame = CGRect(origin: CGPoint(x: attachmentButtonX, y: textInputFrame.maxY - attachmentPillHeight), size: CGSize(width: 40.0, height: attachmentPillHeight))
+         attachmentButtonX += 40.0 + 6.0
++        self.draftPocketButton.isHidden = self.displayDraftPocket == nil || isRecording || hasMediaDraft || self.customLeftAction != nil
++        self.draftPocketButton.isEnabled = !sendingTextDisabled && !isRecording
++        self.draftPocketButton.tintColor = interfaceState.theme.chat.inputPanel.panelControlColor
++        self.updateDraftPocketButton()
++        transition.updateFrame(view: self.draftPocketButton, frame: CGRect(x: attachmentButtonX, y: textInputFrame.maxY - 40.0, width: 40.0, height: 40.0))
++        if self.displayDraftPocket != nil { attachmentButtonX += 44.0 }
+         self.attachmentButtonBackground.update(size: attachmentButtonFrame.size, cornerRadius: 40.0 * 0.5, isDark: interfaceState.theme.overallDarkAppearance, tintColor: defaultGlassTintColor, isInteractive: true, transition: ComponentTransition(transition))
+ 
+         transition.updateFrame(layer: self.attachmentButtonBackground.layer, frame: attachmentButtonFrame)
+diff --git a/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEditorUIKit/Canvas/DocumentCanvasView+ComposerSelection.swift b/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEditorUIKit/Canvas/DocumentCanvasView+ComposerSelection.swift
+index 8268fcda8044d46884fefa14248752378b2e8835..49e3554e46e839495ddfd9ce198684098f8d3423 100644
+--- a/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEditorUIKit/Canvas/DocumentCanvasView+ComposerSelection.swift
++++ b/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEditorUIKit/Canvas/DocumentCanvasView+ComposerSelection.swift
+@@ -4,6 +4,43 @@ import RichTextEditorCore
+ 
+ @available(iOS 13.0, *)
+ extension DocumentCanvasView {
++    var documentTextSelection: DocumentTextSelection? {
++        guard tableSelection == nil, imageSelection == nil else { return nil }
++        let tree = DocumentTree.build(from: Document(blocks: currentBlocks()))
++        let selection = canonicalSelection
++        // The legacy backend has no visual-affinity model and emits downstream only. An alternate
++        // backend state that this setter cannot reproduce must not be captured as a lossless draft.
++        guard selection.anchor.affinity == .downstream, selection.head.affinity == .downstream else { return nil }
++        guard let start = PositionResolver.textPosition(at: selection.anchor.utf16Offset, in: tree),
++              let end = PositionResolver.textPosition(at: selection.head.utf16Offset, in: tree) else {
++            return nil
++        }
++        return DocumentTextSelection(start: DocumentTextPosition(ref: start.ref, offset: start.offset, affinity: .downstream),
++                                     end: DocumentTextPosition(ref: end.ref, offset: end.offset, affinity: .downstream))
++    }
++
++    @discardableResult
++    func setDocumentTextSelection(_ selection: DocumentTextSelection) -> Bool {
++        guard selection.start.affinity != .upstream, selection.end.affinity != .upstream else { return false }
++        let document = Document(blocks: currentBlocks())
++        let tree = DocumentTree.build(from: document)
++        func resolve(_ position: DocumentTextPosition) -> Int? {
++            guard let runs = document.runs(for: position.ref), position.offset >= 0,
++                  position.offset <= runs.reduce(0, { $0 + $1.utf16Count }) else { return nil }
++            return PositionResolver.globalPosition(of: position.ref, offset: position.offset, in: tree)
++        }
++        guard let start = resolve(selection.start), let end = resolve(selection.end) else { return false }
++        finalizeMarkedText()
++        clearStructuralSelections()
++        inputBackend.notifyingSelectionChangeIgnoringCoalescing {
++            applyCaretOutcome(.range(start, end))
++        }
++        setNeedsDisplay()
++        refreshSelectionUI()
++        onSelectionChange?()
++        return true
++    }
++
+     /// One inline atom occurrence inside a paragraph region: `localOffset` is its global-axis offset within
+     /// the region (the editor counts it as 1 `U+FFFC`); `flatLen` is the UTF-16 length the chat flat space
+     /// counts instead (custom emoji alt text or formula LaTeX).
+diff --git a/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEditorUIKit/RichTextEditorView+ComposerHost.swift b/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEditorUIKit/RichTextEditorView+ComposerHost.swift
+index 0191bd2e9c12479372cb05121770aaca555e0355..702ccaeebc3724637c24bf6ef9de605468cd98e5 100644
+--- a/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEditorUIKit/RichTextEditorView+ComposerHost.swift
++++ b/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEditorUIKit/RichTextEditorView+ComposerHost.swift
+@@ -1,5 +1,6 @@
+ #if canImport(UIKit)
+ import UIKit
++import RichTextEditorCore
+ 
+ /// Small public forwarders used by the chat-composer host (`RichTextEditorChatInputNode`). The editing
+ /// surface (`canvas`) and `scrollView` are module-internal, so a consumer in another module reaches these
+@@ -26,6 +27,13 @@ public extension RichTextEditorView {
+         set { self.canvas.composerSelectedRange = newValue }
+     }
+ 
++    var documentTextSelection: DocumentTextSelection? { self.canvas.documentTextSelection }
++
++    @discardableResult
++    func setDocumentTextSelection(_ selection: DocumentTextSelection) -> Bool {
++        return self.canvas.setDocumentTextSelection(selection)
++    }
++
+     /// Reload the editing surface's input views (after changing `customInputView`).
+     func reloadComposerInputViews() { self.canvas.reloadInputViews() }
+ 
+diff --git a/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEngineEditor/RichTextEditorProtocol.swift b/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEngineEditor/RichTextEditorProtocol.swift
+index 1f8b01ee472b353933b8a478fd96333fbbaa647d..354d8eb687c838597b12643dc4b648e281386722 100644
+--- a/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEngineEditor/RichTextEditorProtocol.swift
++++ b/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEngineEditor/RichTextEditorProtocol.swift
+@@ -59,6 +59,11 @@ public protocol RichTextEditor: UIView {
+     func indent()
+     func outdent()
+     var composerSelectedRange: NSRange { get set }
++    /// Exact text selection in Document coordinates, including off-composer-axis text. nil means
++    /// there is no representable text selection (for example, a rectangular table selection).
++    var documentTextSelection: DocumentTextSelection? { get }
++    @discardableResult
++    func setDocumentTextSelection(_ selection: DocumentTextSelection) -> Bool
+     func composerCaretRect() -> CGRect?
+     var isEditorFirstResponder: Bool { get }
+     func resignEditorFirstResponder() -> Bool
+diff --git a/submodules/TelegramUI/Sources/ChatController.swift b/submodules/TelegramUI/Sources/ChatController.swift
+index 5fe58bbf51f3e27c0c06f453b59938c97fc6faa7..fbe0a334562c01df475d5ff12edb79064d80409f 100644
+--- a/submodules/TelegramUI/Sources/ChatController.swift
++++ b/submodules/TelegramUI/Sources/ChatController.swift
+@@ -267,6 +267,14 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+     var contentData: ChatControllerImpl.ContentData?
+     let contentDataReady = ValuePromise<Bool>(false, ignoreRepeated: true)
+     var contentDataDisposable: Disposable?
++    var draftPocketOperationInProgress = false
++    var draftPocketScope = ChatInputScopeTracker()
++    var draftPocketComposerGeneration: UInt64 = 0
++    var draftPocketHasActiveToken = false
++    var draftPocketExpectedActiveToken: Data?
++    var draftPocketView: DraftPocketView?
++    let draftPocketObservation = MetaDisposable()
++    weak var draftPocketController: DraftPocketController?
+     var newTopicEventsDisposable: Disposable?
+     var didHandlePerformDismissAction: Bool = false
+     var didInitializePersistentPeerInterfaceData: Bool = false
+@@ -2408,6 +2416,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+                 }
+             }
+             
++            let inputClearGuard = strongSelf.capturePendingInputClear()
+             var attributes: [MessageAttribute] = []
+             if let query = query {
+                 attributes.append(EmojiSearchQueryMessageAttribute(query: query))
+@@ -2483,6 +2492,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+                 if silentPosting {
+                     strongSelf.chatDisplayNode.setupSendActionOnViewUpdate({
+                         if let strongSelf = self {
++                            guard strongSelf.canApplyPendingInputClear(inputClearGuard) else { return }
+                             strongSelf.chatDisplayNode.collapseInput()
+                             
+                             strongSelf.updateChatPresentationInterfaceState(animated: true, interactive: false, { current in
+@@ -2512,6 +2522,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+                 } else if schedule {
+                     strongSelf.chatDisplayNode.setupSendActionOnViewUpdate({
+                         if let strongSelf = self {
++                            guard strongSelf.canApplyPendingInputClear(inputClearGuard) else { return }
+                             strongSelf.chatDisplayNode.collapseInput()
+                             
+                             strongSelf.updateChatPresentationInterfaceState(animated: true, interactive: false, { current in
+@@ -2580,8 +2591,10 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+                             }
+                         }
+ 
++                        let routedInputClearGuard = overrideThreadId.map { inputClearGuard.withUpdatedThreadId($0) } ?? inputClearGuard
+                         strongSelf.chatDisplayNode.setupSendActionOnViewUpdate({
+                             if let strongSelf = self {
++                                guard strongSelf.canApplyPendingInputClear(routedInputClearGuard) else { return }
+                                 strongSelf.chatDisplayNode.collapseInput()
+ 
+                                 strongSelf.updateChatPresentationInterfaceState(animated: true, interactive: false, { current in
+@@ -2611,9 +2624,11 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+                     }
+                     
+                     if let targetThreadId {
+-                        strongSelf.chatDisplayNode.historyNode.stopHistoryUpdates()
++                        let routingPeerId = strongSelf.chatLocation.peerId
+                         strongSelf.updateChatLocationThread(threadId: targetThreadId, animationDirection: .right, transferInputState: true, completion: { [weak strongSelf] in
+-                            guard let strongSelf else {
++                            guard let strongSelf, !strongSelf.draftPocketOperationInProgress, !strongSelf.isUpdatingChatLocationThread,
++                                  strongSelf.chatLocation.peerId == routingPeerId,
++                                  strongSelf.chatLocation.threadId == targetThreadId else {
+                                 return
+                             }
+                             doSend(targetThreadId)
+@@ -3515,6 +3530,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+                 if let messageId, Namespaces.Message.allEphemeral.contains(messageId.namespace) {
+                     return
+                 }
++                let inputClearGuard = strongSelf.capturePendingInputClear()
+                 strongSelf.chatDisplayNode.setupSendActionOnViewUpdate({}, nil)
+                 var postAsReply = false
+                 if !command.contains("@") {
+@@ -3539,6 +3555,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+                 
+                 strongSelf.chatDisplayNode.setupSendActionOnViewUpdate({
+                     if let strongSelf = self {
++                        guard strongSelf.canApplyPendingInputClear(inputClearGuard) else { return }
+                         strongSelf.chatDisplayNode.collapseInput()
+                         
+                         strongSelf.updateChatPresentationInterfaceState(animated: true, interactive: false, {
+@@ -7082,6 +7099,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+     }
+ 
+     deinit {
++        self.draftPocketObservation.dispose()
+         let _ = ChatControllerCount.modify { value in
+             return value - 1
+         }
+@@ -7686,6 +7704,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+     
+     override public func loadDisplayNode() {
+         self.loadDisplayNodeImpl()
++        self.refreshDraftPocketCount()
+         self.galleryPresentationContext.view = self.view
+         self.galleryPresentationContext.controllersUpdated = { [weak self] _ in
+             guard let self else {
+@@ -8354,6 +8373,8 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+     }
+     
+     func saveInterfaceState(includeScrollState: Bool = true) {
++        // The transfer transaction already owns the active draft until the UI has accepted its result.
++        if self.draftPocketOperationInProgress { return }
+         if case .messageOptions = self.subject {
+             return
+         }
+@@ -8390,9 +8411,23 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+             interfaceState = interfaceState.withUpdatedHistoryScrollState(scrollState)
+         }
+         interfaceState = interfaceState.withUpdatedInputLanguage(self.chatDisplayNode.currentTextInputLanguage)
+-        let _ = ChatInterfaceState.update(engine: self.context.engine, peerId: peerId, threadId: threadId, { _ in
+-            return interfaceState
+-        }).startStandalone()
++        if interfaceState.mediaDraftState == nil, let opaqueData = try? EngineEncoder.encode(interfaceState) {
++            let opaqueState = OpaqueChatInterfaceState(opaqueData: opaqueData, historyScrollMessageIndex: interfaceState.historyScrollMessageIndex, mediaDraftState: nil, synchronizeableInputState: interfaceState.synchronizeableInputState)
++            let expectedToken = try? draftPocketActiveStateToken(opaqueState)
++            let pocketScope = self.draftPocketScope.token
++            let composerGeneration = self.draftPocketComposerGeneration
++            let _ = (self.context.engine.peers.setOpaqueChatInterfaceState(peerId: peerId, threadId: threadId, state: opaqueState, retainedDraftResourceIds: draftPocketRetainedResourceIds(in: interfaceState.composeInputState.content))
++            |> deliverOnMainQueue).startStandalone(completed: { [weak self] in
++                guard let self, self.draftPocketScope.matches(pocketScope),
++                      self.draftPocketComposerGeneration == composerGeneration else { return }
++                self.draftPocketExpectedActiveToken = expectedToken
++                self.draftPocketHasActiveToken = true
++            })
++        } else {
++            let _ = ChatInterfaceState.update(engine: self.context.engine, peerId: peerId, threadId: threadId, { _ in
++                return interfaceState
++            }).startStandalone()
++        }
+         
+         self.context.engine.peers.setPerstistentChatInterfaceState(peerId: peerId, state: CodableEntry(self.presentationInterfaceState.persistentData))
+     }
+@@ -9494,9 +9529,11 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+                 }
+                 
+                 if let targetThreadId {
+-                    strongSelf.chatDisplayNode.historyNode.stopHistoryUpdates()
++                    let routingPeerId = strongSelf.chatLocation.peerId
+                     strongSelf.updateChatLocationThread(threadId: targetThreadId, animationDirection: .right, transferInputState: true, completion: { [weak strongSelf] in
+-                        guard let strongSelf else {
++                        guard let strongSelf, !strongSelf.draftPocketOperationInProgress, !strongSelf.isUpdatingChatLocationThread,
++                              strongSelf.chatLocation.peerId == routingPeerId,
++                              strongSelf.chatLocation.threadId == targetThreadId else {
+                             return
+                         }
+                         doSend(targetThreadId)
+@@ -9526,6 +9563,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+             return
+         }
+         
++        let inputClearGuard = self.capturePendingInputClear()
+         var isScheduledMessages = false
+         if case .scheduledMessages = self.presentationInterfaceState.subject {
+             isScheduledMessages = true
+@@ -9541,6 +9579,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+             if self.context.engine.messages.enqueueOutgoingMessageWithChatContextResult(to: peerId, threadId: self.chatLocation.threadId, botId: results.botId, result: result, replyToMessageId: replyMessageSubject?.subjectModel, hideVia: hideVia, silentPosting: silentPosting, scheduleTime: scheduleTime, sendPaidMessageStars: sendPaidMessageStars, postpone: postpone) {
+                 self.chatDisplayNode.setupSendActionOnViewUpdate({ [weak self] in
+                     if let strongSelf = self {
++                        guard strongSelf.canApplyPendingInputClear(inputClearGuard) else { return }
+                         strongSelf.chatDisplayNode.collapseInput()
+                         
+                         strongSelf.updateChatPresentationInterfaceState(animated: true, interactive: true, { state in
+@@ -11237,6 +11276,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+     var currentChatSwitchDirection: ChatControllerAnimateInnerChatSwitchDirection?
+     
+     func updateChatLocationToOther(chatLocation: ChatLocation) {
++        guard !self.draftPocketOperationInProgress else { return }
+         self.saveInterfaceState()
+         self.chatDisplayNode.dismissTextInput()
+         
+@@ -11256,6 +11296,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+             self.chatDisplayNode.prepareSwitchToChatLocation(chatLocation: chatLocation, historyNode: historyNode, animationDirection: nil)
+             
+             apply(self.didAppear ? .animated(duration: 0.4, curve: .spring) : .immediate)
++            self.refreshDraftPocketCount()
+             
+             self.currentChatSwitchDirection = nil
+             self.isUpdatingChatLocationThread = false
+@@ -11263,6 +11304,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+     }
+     
+     func updateInitialChatBotForumLocationThread(linkedForumId: EnginePeer.Id, threadId: Int64) {
++        guard !self.draftPocketOperationInProgress else { return }
+         if self.isUpdatingChatLocationThread {
+             assertionFailure()
+             return
+@@ -11303,6 +11345,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+             self.chatDisplayNode.prepareSwitchToChatLocation(chatLocation: updatedChatLocation, historyNode: historyNode, animationDirection: nil)
+ 
+             apply(.animated(duration: 0.4, curve: .spring))
++            self.refreshDraftPocketCount()
+             
+             self.currentChatSwitchDirection = nil
+             self.isUpdatingChatLocationThread = false
+@@ -11333,7 +11376,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+                 completion?()
+                 return
+             }
+-            if self.isUpdatingChatLocationThread {
++            if self.isUpdatingChatLocationThread || self.draftPocketOperationInProgress {
+                 completion?()
+                 return
+             }
+@@ -11440,6 +11483,7 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+                 self.chatDisplayNode.prepareSwitchToChatLocation(chatLocation: updatedChatLocation, historyNode: historyNode, animationDirection: animationDirection)
+                 
+                 apply(.animated(duration: transferInputState ? 0.3 : 0.4, curve: .spring))
++                self.refreshDraftPocketCount(preservingTransferredComposer: transferInputState)
+                 
+                 if let navigationSnapshot, let animationDirection {
+                     let mappedAnimationDirection: ChatTitleView.AnimateFromSnapshotDirection
+diff --git a/submodules/TelegramUI/Sources/ChatControllerNode.swift b/submodules/TelegramUI/Sources/ChatControllerNode.swift
+index ee5838449d59b1c0631b319620f5f900d8aba298..137597567fd3edd810438888df20ff686525a876 100644
+--- a/submodules/TelegramUI/Sources/ChatControllerNode.swift
++++ b/submodules/TelegramUI/Sources/ChatControllerNode.swift
+@@ -344,6 +344,8 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+     
+     var requestUpdateChatInterfaceState: (ContainedViewLayoutTransition, Bool, (ChatInterfaceState) -> ChatInterfaceState) -> Void = { _, _, _ in }
+     var requestUpdateInterfaceState: (ContainedViewLayoutTransition, Bool, (ChatPresentationInterfaceState) -> ChatPresentationInterfaceState) -> Void = { _, _, _ in }
++    private var draftPocketSendPreparationInProgress = false
++
+     var sendMessages: ([EnqueueMessage], Bool?, Int32?, Int32?, Bool, Bool) -> Void = { _, _, _, _, _, _ in }
+     var displayAttachmentMenu: () -> Void = { }
+     var paste: (ChatTextInputPanelPasteData) -> Void = { _ in }
+@@ -1035,6 +1037,10 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+         self.textInputPanelNode?.displayAttachmentMenu = { [weak self] in
+             self?.displayAttachmentMenu()
+         }
++        self.textInputPanelNode?.displayDraftPocket = { [weak self] in
++            self?.controller?.openDraftPocket()
++        }
++        self.controller?.refreshDraftPocketCount()
+         self.textInputPanelNode?.updateActivity = { [weak self] in
+             self?.updateTypingActivity(true)
+         }
+@@ -5005,6 +5011,105 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+         }
+     }
+     
++    /// Snapshot the actual outgoing composer before media transforms or history callbacks
++    /// can release its active resource owner. Preparation never dismisses the keyboard.
++    private func prepareDraftPocketMessageSend(_ source: ChatPresentationInterfaceState, inputClearGuard: ChatInputClearGuard, send: @escaping (String?) -> Void) {
++        let input = source.interfaceState.composeInputState
++        let hasRetainedResources = draftPocketRetainedResourceIds(in: input.content)?.isEmpty == false
++        guard !input.content.allMedia.isEmpty || hasRetainedResources else {
++            send(nil)
++            return
++        }
++        // These destinations do not participate in the account/chat Pocket ownership graph.
++        guard let peerId = self.chatLocation.peerId, peerId.namespace != Namespaces.Peer.SecretChat else {
++            send(nil)
++            return
++        }
++        guard !self.draftPocketSendPreparationInProgress else { return }
++        let threadId = self.chatLocation.threadId
++        let captured = source.interfaceState.withUpdatedInputLanguage(self.textInputPanelNode?.effectiveInputLanguage)
++        let unchanged: (ChatControllerNode) -> Bool = { node in
++            let current = node.chatPresentationInterfaceState.interfaceState
++            return node.controller?.canApplyPendingInputClear(inputClearGuard, allowMarkedText: true) == true
++                && node.chatLocation.peerId == peerId && node.chatLocation.threadId == threadId
++                && node.textInputPanelNode?.inputTextState == input
++                && current.replyMessageSubject == captured.replyMessageSubject
++                && current.composeDisableUrlPreviews == captured.composeDisableUrlPreviews
++                && current.sendMessageEffect == captured.sendMessageEffect
++                && current.forwardMessageIds == captured.forwardMessageIds
++                && current.forwardOptionsState == captured.forwardOptionsState
++                && current.editMessage == captured.editMessage
++                && current.postSuggestionState == captured.postSuggestionState
++                && current.silentPosting == captured.silentPosting
++                && current.mediaDraftState == captured.mediaDraftState
++                && canSendMessagesToChat(node.chatPresentationInterfaceState)
++        }
++        self.draftPocketSendPreparationInProgress = true
++        let _ = (self.context.engine.peers.draftPocketSendRequiresRetention(peerId: peerId, threadId: threadId, resourceIds: draftPocketRetainedResourceIds(in: input.content))
++        |> deliverOnMainQueue).startStandalone(next: { [weak self] ownership in
++            guard let self else { return }
++            guard unchanged(self) else {
++                self.draftPocketSendPreparationInProgress = false
++                self.draftPocketSendNotice(DraftPocketStrings(self.chatPresentationInterfaceState.strings).sendChanged)
++                return
++            }
++            switch ownership {
++            case .failure:
++                self.draftPocketSendPreparationInProgress = false
++                self.draftPocketSendNotice(DraftPocketStrings(self.chatPresentationInterfaceState.strings).sendNotPrepared)
++                return
++            case let .success(requiresRetention):
++                if !requiresRetention {
++                    // Ordinary media sends do not acquire Pocket's new IME, structural
++                    // selection or encoding restrictions.
++                    self.draftPocketSendPreparationInProgress = false
++                    send(nil)
++                    return
++                }
++            }
++            guard let panel = self.textInputPanelNode, captured.mediaDraftState == nil,
++                  !panel.draftPocketHasMarkedText,
++                  panel.richTextInputNode?.supportsExactInputSelection != false else {
++                self.draftPocketSendPreparationInProgress = false
++                self.draftPocketSendNotice(DraftPocketStrings(self.chatPresentationInterfaceState.strings).sendNotPrepared)
++                return
++            }
++            let snapshot: DraftPocketSnapshot
++            do {
++                let opaque = OpaqueChatInterfaceState(opaqueData: try EngineEncoder.encode(captured), historyScrollMessageIndex: captured.historyScrollMessageIndex, mediaDraftState: nil, synchronizeableInputState: captured.synchronizeableInputState)
++                snapshot = try DraftPocketSnapshot(content: input.content, selection: input.selection, state: opaque)
++            } catch {
++                self.draftPocketSendPreparationInProgress = false
++                self.draftPocketSendNotice(DraftPocketStrings(self.chatPresentationInterfaceState.strings).sendNotPrepared)
++                return
++            }
++            let _ = (self.context.engine.peers.prepareDraftPocketSend(peerId: peerId, threadId: threadId, snapshot: snapshot)
++            |> deliverOnMainQueue).startStandalone(next: { [weak self] result in
++                guard let self else { return }
++                self.draftPocketSendPreparationInProgress = false
++                guard unchanged(self), self.textInputPanelNode?.draftPocketHasMarkedText != true else {
++                    // A prepared snapshot remains visible in Interrupted Sends. Never clear
++                    // newer input, or send the old body after its controller changed context.
++                    self.draftPocketSendNotice(DraftPocketStrings(self.chatPresentationInterfaceState.strings).sendChanged)
++                    return
++                }
++                switch result {
++                case let .prepared(operationId):
++                    send(operationId)
++                case .untracked, .failure:
++                    // An owner disappearing after our positive check is a conflict, not
++                    // permission to skip the durable handoff.
++                    self.draftPocketSendNotice(DraftPocketStrings(self.chatPresentationInterfaceState.strings).sendNotPrepared)
++                }
++            })
++        })
++    }
++
++    private func draftPocketSendNotice(_ text: String) {
++        guard let controller = self.controller else { return }
++        controller.present(UndoOverlayController(presentationData: controller.presentationData, content: .info(title: nil, text: text, timeout: nil, customUndoText: nil), action: { _ in false }), in: .window(.root))
++    }
++
+     func maybeSendEphemeralMessage(sendNormally: @escaping () -> Void) {
+         var isScheduledMessages = false
+         if case .scheduledMessages = self.chatPresentationInterfaceState.subject {
+@@ -5014,12 +5119,14 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+         let interfaceState = self.chatPresentationInterfaceState.interfaceState
+         let inputText = interfaceState.effectiveInputState.inputText.string
+         if !isScheduledMessages, interfaceState.editMessage == nil, interfaceState.postSuggestionState == nil, interfaceState.forwardMessageIds == nil, let peerId = self.chatLocation.peerId, mayContainTypedEphemeralBotCommand(inputText) {
++            let inputClearGuard = self.controller?.capturePendingInputClear()
+             let _ = (self.context.engine.peers.peerCommands(id: peerId)
+             |> take(1)
+             |> deliverOnMainQueue).startStandalone(next: { [weak self] peerCommands in
+                 guard let self else {
+                     return
+                 }
++                guard let inputClearGuard, self.controller?.canApplyPendingInputClear(inputClearGuard, allowMarkedText: true) == true else { return }
+ 
+                 if let resolved = resolveEphemeralBotCommand(text: inputText, peerCommands: peerCommands) {
+                     let replyMessageSubject = self.chatPresentationInterfaceState.interfaceState.replyMessageSubject
+@@ -5027,6 +5134,7 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+                         guard let strongSelf = self else {
+                             return
+                         }
++                        guard strongSelf.controller?.canApplyPendingInputClear(inputClearGuard) == true else { return }
+                         strongSelf.collapseInput()
+ 
+                         strongSelf.controller?.updateChatPresentationInterfaceState(animated: true, interactive: false, {
+@@ -5051,6 +5159,7 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+     }
+ 
+     func sendCurrentMessage(silentPosting: Bool? = nil, scheduleTime: Int32? = nil, repeatPeriod: Int32? = nil, postpone: Bool = false, messageEffect: ChatSendMessageEffect? = nil, sendWithoutFormatting: Bool = false, completion: @escaping () -> Void = {}) {
++        guard !self.draftPocketSendPreparationInProgress else { return }
+         guard let textInputPanelNode = self.inputPanelNode as? ChatTextInputPanelNode else {
+             return
+         }
+@@ -5066,6 +5175,8 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+             effectivePresentationInterfaceState = effectivePresentationInterfaceState.updatedInterfaceState { $0.withUpdatedEffectiveInputState(textInputPanelNode.inputTextState) }
+         }
+         
++        let inputClearGuard = ChatInputClearGuard(peerId: self.chatLocation.peerId, threadId: self.chatLocation.threadId, generation: self.controller?.draftPocketComposerGeneration ?? 0, input: effectivePresentationInterfaceState.interfaceState.composeInputState, state: effectivePresentationInterfaceState.interfaceState)
++
+         if let _ = effectivePresentationInterfaceState.interfaceState.editMessage, effectivePresentationInterfaceState.interfaceState.postSuggestionState == nil {
+             self.interfaceInteraction?.editMessage()
+         } else {
+@@ -5419,11 +5530,35 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+                     }
+                 }
+                 
+-                let doSend: (Int64?) -> Void = { [weak self] overrideThreadId in
++                let sendPrepared: (Int64?, String?) -> Void = { [weak self] overrideThreadId, retentionOperationId in
+                     guard let self else {
+                         return
+                     }
+-                    
++                    let routedInputClearGuard = overrideThreadId.map { inputClearGuard.withUpdatedThreadId($0) } ?? inputClearGuard
++                    guard self.controller?.canApplyPendingInputClear(routedInputClearGuard, allowMarkedText: retentionOperationId == nil) == true else {
++                        self.draftPocketSendNotice(DraftPocketStrings(self.chatPresentationInterfaceState.strings).sendChanged)
++                        return
++                    }
++                    if retentionOperationId != nil {
++                        // Thread transfer is asynchronous too. Recheck before invoking a
++                        // completion that may clear the composer (including When Online).
++                        let current = self.chatPresentationInterfaceState.interfaceState
++                        let sent = effectivePresentationInterfaceState.interfaceState
++                        let expectedThreadId = overrideThreadId ?? effectivePresentationInterfaceState.chatLocation.threadId
++                        guard self.chatLocation.peerId == effectivePresentationInterfaceState.chatLocation.peerId,
++                              self.chatLocation.threadId == expectedThreadId,
++                              self.textInputPanelNode?.inputTextState == sent.composeInputState,
++                              self.textInputPanelNode?.draftPocketHasMarkedText != true,
++                              current.replyMessageSubject == sent.replyMessageSubject,
++                              current.sendMessageEffect == sent.sendMessageEffect,
++                              current.forwardMessageIds == sent.forwardMessageIds,
++                              current.forwardOptionsState == sent.forwardOptionsState,
++                              current.composeDisableUrlPreviews == sent.composeDisableUrlPreviews else {
++                            self.draftPocketSendNotice(DraftPocketStrings(self.chatPresentationInterfaceState.strings).sendChanged)
++                            return
++                        }
++                    }
++
+                     var messages = messages
+                     if let overrideThreadId {
+                         messages = messages.map { message in
+@@ -5431,6 +5566,16 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+                         }
+                     }
+                     
++                    if let retentionOperationId {
++                        messages = messages.map { message in
++                            message.withUpdatedAttributes { attributes in
++                                var attributes = attributes
++                                attributes.append(DraftPocketSendRetentionAttribute(operationId: retentionOperationId))
++                                return attributes
++                            }
++                        }
++                    }
++
+                     var usedCorrelationId: Int64?
+                     if !messages.isEmpty, case .message = messages[messages.count - 1] {
+                         let correlationId = Int64.random(in: 0 ..< Int64.max)
+@@ -5456,6 +5601,19 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+                         guard let self, let textInputPanelNode = self.inputPanelNode as? ChatTextInputPanelNode else {
+                             return
+                         }
++                        guard self.controller?.canApplyPendingInputClear(routedInputClearGuard) == true else { return }
++                        if retentionOperationId != nil {
++                            // Media transforms can finish after the user resumes typing. The
++                            // prepared outgoing snapshot is durable; newer input must survive.
++                            let current = self.chatPresentationInterfaceState.interfaceState
++                            let sent = effectivePresentationInterfaceState.interfaceState
++                            guard textInputPanelNode.inputTextState == sent.composeInputState,
++                                  current.replyMessageSubject == sent.replyMessageSubject,
++                                  current.sendMessageEffect == sent.sendMessageEffect,
++                                  current.forwardMessageIds == sent.forwardMessageIds,
++                                  current.forwardOptionsState == sent.forwardOptionsState,
++                                  current.composeDisableUrlPreviews == sent.composeDisableUrlPreviews else { return }
++                        }
+                         self.collapseInput()
+                         
+                         self.ignoreUpdateHeight = true
+@@ -5506,21 +5664,28 @@ class ChatControllerNode: ASDisplayNode, ASScrollViewDelegate {
+                     }
+                 }
+                 
+-                if let targetThreadId {
+-                    self.historyNode.stopHistoryUpdates()
+-                    self.controller?.updateChatLocationThread(threadId: targetThreadId, animationDirection: .right, transferInputState: true, completion: { [weak self] in
+-                        guard let self else {
+-                            return
+-                        }
+-                        doSend(targetThreadId)
+-                        if clearMainThreadForward, let peerId {
+-                            let _ = ChatInterfaceState.update(engine: self.context.engine, peerId: peerId, threadId: nil, { current in
+-                                return current.withUpdatedForwardMessageIds(nil)
+-                            }).startStandalone()
+-                        }
+-                    })
+-                } else {
+-                    doSend(nil)
++                // Prepare before thread transfer, clear-on-history registration, and
++                // completion (Send When Online clears inside that callback). A new-topic
++                // transfer can release the original thread's active resource owner too.
++                self.prepareDraftPocketMessageSend(effectivePresentationInterfaceState, inputClearGuard: inputClearGuard) { [weak self] retentionOperationId in
++                    guard let self else { return }
++                    if let targetThreadId {
++                        let routingPeerId = self.chatLocation.peerId
++                        self.controller?.updateChatLocationThread(threadId: targetThreadId, animationDirection: .right, transferInputState: true, completion: { [weak self] in
++                            guard let self, self.controller?.draftPocketOperationInProgress == false,
++                                  self.controller?.isUpdatingChatLocationThread == false,
++                                  self.chatLocation.peerId == routingPeerId,
++                                  self.chatLocation.threadId == targetThreadId else { return }
++                            sendPrepared(targetThreadId, retentionOperationId)
++                            if clearMainThreadForward, let peerId {
++                                let _ = ChatInterfaceState.update(engine: self.context.engine, peerId: peerId, threadId: nil, { current in
++                                    return current.withUpdatedForwardMessageIds(nil)
++                                }).startStandalone()
++                            }
++                        })
++                    } else {
++                        sendPrepared(nil, retentionOperationId)
++                    }
+                 }
+             }
+         }

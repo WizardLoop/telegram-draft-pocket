@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "demo_new": [
+    "Tests/DraftPocketDemo/BUILD",
+    "Tests/DraftPocketDemo/DraftPocketDemoUITests.swift",
+    "build-system/draft-pocket-xctestrunner.patch",
+    "submodules/TelegramCore/Sources/DraftPocketDemoBootstrap.swift"
+  ],
+  "demo_modified": [
+    "MODULE.bazel",
+    "build-system/BUILD",
+    "submodules/TelegramCore/Sources/Network/Network.swift",
+    "submodules/TelegramUI/Sources/AppDelegate.swift",
+    "submodules/UndoUI/Sources/UndoOverlayControllerNode.swift",
+    "submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift",
+    "submodules/TelegramUI/Sources/ChatController.swift"
+  ],
+  "feature_sha256": {
+    "MODULE.bazel": "22e223ae5c73a681a4ee6368d7939d429717fba405eae035849bcf37a2c0c98c",
+    "build-system/BUILD": "11c3dcc214dc9298c6602b63baea535cfb0845730ebfe22a33bfb9081595425f",
+    "submodules/TelegramCore/Sources/Network/Network.swift": "b135376f7db35a77995d2c06dd92d1ba9b6acbe490cd339d8f745307c3ca812e",
+    "submodules/TelegramUI/Sources/AppDelegate.swift": "80c33608e1ad3982150be06f8d5175654b1d5f5ce0601afc9829739a3307e976",
+    "submodules/UndoUI/Sources/UndoOverlayControllerNode.swift": "092f55621b28a09b14eb3a9accb1b3543858074207c8995f8b07649414b4880a",
+    "submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift": "98f0c9cec725e492c998e3957cbbdf7c26902e0d5edb1ad0b376a043eeafa95c",
+    "submodules/TelegramUI/Sources/ChatController.swift": "db10468a48df8a209bb044ad22265754454e804deedacfd6c86b9ecff6352989"
+  }
+}

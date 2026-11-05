@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "inventory_date": "2026-11-04",
+  "supplied_inputs": [
+    {
+      "name": "Pasted text.txt",
+      "type": "text/plain",
+      "bytes": 43393,
+      "source": "user attachment in this task",
+      "role": "implementation brief",
+      "redistributed": false,
+      "dimensions": null,
+      "duration_seconds": null,
+      "fps": null
+    }
+  ],
+  "assets": [],
+  "notes": "No media was supplied. No custom-emoji server identifiers or user-media permissions are inferred."
+}
