@@ -2,7 +2,7 @@
 
 The user authorized a **fictional `@wizardloop` demo**. This optional overlay opens that isolated fixture in the actual Telegram application: AppDelegate → Account/Postbox → SharedAccountContext/AccountContext → production ChatController. It does not use ComposerHarness, a replacement chat screen, a separate Pocket store, or a real Telegram account.
 
-The overlay and XCUITest scenario are source implementations awaiting native build/runtime results. A passing patch check is not a successful iOS run. No verified video or frame evaluation is claimed here; see [TESTING](../docs/TESTING.md) for actual run results.
+The full app and XCUITest target compiled in run `41924742880`; validation/capture tooling stopped that attempt before Simulator interaction. Runtime results remain pending. No verified video or frame evaluation is claimed here; see [TESTING](../docs/TESTING.md) for actual run results.
 
 ## Isolation and launch
 

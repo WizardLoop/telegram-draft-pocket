@@ -1,4 +1,4 @@
-"""Independent native-test and capture failures must not suppress each other."""
+"""Portable preflight gates expensive work; native/capture failures remain independent."""
 
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
 import importlib.util
@@ -59,6 +59,7 @@ class SimulatorFlowTests(unittest.TestCase):
         artifacts = root / "evidence"
         config = json.loads((ROOT / "Integration/build-configuration.example.json").read_text())
         config.update(api_id="123456", api_hash="a" * 32)
+        secret_json = json.dumps(config)
         base = {"commit": "b" * 40, "versions": {"macos": "27", "xcode": "27.1"}}
         manifest = {"feature": {"patch": {"sha256": "c" * 64}},
                     "demo": {"available": with_demo, "patch": {"sha256": "d" * 64}}}
@@ -67,8 +68,14 @@ class SimulatorFlowTests(unittest.TestCase):
         def start(command, **kwargs):
             self.assertNotIn("DRAFT_POCKET_BUILD_CONFIGURATION_JSON", os.environ)
             name = "capture" if Path(command[1]).name == "capture-demo.py" else command[2]
+            if name == "test":
+                name = "native-tests" if "--native" in command else "portable-tests"
             visited.append(name)
-            return mock.Mock(stdout=iter([f"{name} synthetic output {config['api_hash']}\n"]),
+            # Before configuration parsing only the raw secret is in the redaction list.
+            # Children never receive it; this synthetic output verifies that early logs still
+            # redact an accidental complete-secret echo without requiring parsed credentials.
+            echoed_secret = secret_json if name == "portable-tests" else config["api_hash"]
+            return mock.Mock(stdout=iter([f"{name} synthetic output {echoed_secret}\n"]),
                              wait=mock.Mock(return_value=results.get(name, 0)))
 
         def tool(command, **kwargs):
@@ -89,7 +96,7 @@ class SimulatorFlowTests(unittest.TestCase):
 
         with ExitStack() as stack:
             stack.enter_context(mock.patch.dict(os.environ, {"RUNNER_TEMP": str(root),
-                "DRAFT_POCKET_BUILD_CONFIGURATION_JSON": json.dumps(config),
+                "DRAFT_POCKET_BUILD_CONFIGURATION_JSON": secret_json,
                 "GITHUB_STEP_SUMMARY": str(root / "summary.md")}, clear=True))
             stack.enter_context(mock.patch.object(ci.package, "validate_package", return_value=(base, manifest)))
             stack.enter_context(mock.patch.object(ci.package, "run", side_effect=tool))
@@ -107,9 +114,10 @@ class SimulatorFlowTests(unittest.TestCase):
         return code, json.loads((artifacts / "status.json").read_text()), artifacts, visited
 
     def test_native_failure_still_attempts_capture_and_exit_stays_failed(self):
-        code, status, artifacts, visited = self.attempt({"test": 1})
+        code, status, artifacts, visited = self.attempt({"native-tests": 1})
         self.assertEqual(code, 1)
-        self.assertEqual(visited, ["bootstrap", "check", "build", "test", "capture"])
+        self.assertEqual(visited, ["portable-tests", "bootstrap", "check", "build", "native-tests", "capture"])
+        self.assertEqual(status["stages"]["portable_tests"], "passed")
         self.assertEqual(status["stages"]["build"], "passed")
         self.assertEqual(status["stages"]["native_tests"], "failed")
         self.assertEqual(status["stages"]["capture"], "passed")
@@ -120,7 +128,7 @@ class SimulatorFlowTests(unittest.TestCase):
         self.assertTrue((artifacts / "capture.log").is_file())
 
     def test_both_failures_and_their_timestamps_survive(self):
-        code, status, artifacts, visited = self.attempt({"test": 1, "capture": 2})
+        code, status, artifacts, visited = self.attempt({"native-tests": 1, "capture": 2})
         self.assertEqual(code, 1)
         self.assertEqual(set(status["failures"]), {"native_tests", "capture"})
         for stage in ("native_tests", "capture"):
@@ -133,10 +141,27 @@ class SimulatorFlowTests(unittest.TestCase):
     def test_failed_app_build_prevents_tests_and_capture(self):
         code, status, _, visited = self.attempt({"build": 1})
         self.assertEqual(code, 1)
-        self.assertEqual(visited, ["bootstrap", "check", "build"])
+        self.assertEqual(visited, ["portable-tests", "bootstrap", "check", "build"])
         self.assertEqual(status["stages"]["native_tests"], "not_run")
         self.assertEqual(status["stages"]["capture"], "not_run")
         self.assertEqual(set(status["failures"]), {"build"})
+
+    def test_portable_failure_stops_before_toolchain_reconstruction_build_and_capture(self):
+        code, status, artifacts, visited = self.attempt({"portable-tests": 1})
+        self.assertEqual(code, 1)
+        self.assertEqual(visited, ["portable-tests"])
+        self.assertEqual(status["stages"]["package_integrity"], "passed")
+        self.assertEqual(status["stages"]["portable_tests"], "failed")
+        for stage in ("toolchain", "configuration", "reconstruction", "build", "native_tests", "capture"):
+            self.assertEqual(status["stages"][stage], "not_run")
+            self.assertNotIn(stage, status["stage_times_utc"])
+        self.assertEqual(set(status["failures"]), {"portable_tests"})
+        self.assertEqual(set(status["stage_times_utc"]["portable_tests"]), {"running", "failed"})
+        self.assertTrue((artifacts / "portable-tests.log").is_file())
+        self.assertIn("[REDACTED]", (artifacts / "portable-tests.log").read_text())
+        self.assertFalse((artifacts / "build.log").exists())
+        self.assertFalse((artifacts / "native-tests.log").exists())
+        self.assertFalse((artifacts / "capture.log").exists())
 
     def test_all_success_has_no_failure_artifact(self):
         code, status, artifacts, visited = self.attempt({})
@@ -144,10 +169,10 @@ class SimulatorFlowTests(unittest.TestCase):
         self.assertTrue(all(value == "passed" for value in status["stages"].values()))
         self.assertNotIn("failures", status)
         self.assertFalse((artifacts / "failure.txt").exists())
-        self.assertEqual(visited[-1], "capture")
+        self.assertEqual(visited, ["portable-tests", "bootstrap", "check", "build", "native-tests", "capture"])
 
     def test_missing_demo_is_preserved_alongside_native_failure(self):
-        code, status, _, visited = self.attempt({"test": 1}, with_demo=False)
+        code, status, _, visited = self.attempt({"native-tests": 1}, with_demo=False)
         self.assertEqual(code, 1)
         self.assertEqual(set(status["failures"]), {"native_tests", "capture"})
         self.assertNotIn("capture", visited)

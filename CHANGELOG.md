@@ -14,5 +14,6 @@
 - Insert the fictional question after actual draft typing and preserve only explicitly named original XCTest screenshots with their native result identities.
 - Protect newer and identically restored drafts from delayed send callbacks; narrow active media ownership during ordinary autosave and collect abandoned preparations after failure.
 - Verify installed Simulator app/framework hashes against the fresh test host and retain custom XCTest screenshots with a one-field patch to the same pinned runner.
+- Run portable validation on the actual Mac before the full build; resolve the UI test's declared host artifact across Bazel configuration transitions and macOS filesystem aliases.
 - Repair the pinned composer harness's missing share-screen protocol method, discovered by the actual native build.
 - Keep native runtime and capture results separate from source/packaging validation; refuse unsupported transfers before mutation.

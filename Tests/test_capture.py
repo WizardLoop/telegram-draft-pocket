@@ -4,8 +4,10 @@ import importlib.util
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 import plistlib
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -246,6 +248,32 @@ class BinaryProvenanceTests(unittest.TestCase):
         self.udid = "CA1C775E-9033-4666-9B09-1E195CA035B5"
         self.application = "A3159F14-508D-4CB9-946D-84ED2F4FEFAE"
         self.bundle_id = "org.example.draftpocket"
+        self.target = "//Tests/DraftPocketDemo:DraftPocketDemoUITests"
+
+    def create_runner(self, checkout, artifact, host="Telegram/Telegram.ipa"):
+        runner = checkout / "bazel-bin/Tests/DraftPocketDemo/DraftPocketDemoUITests"
+        runner.parent.mkdir(parents=True, exist_ok=True)
+        runner.write_text('#!/bin/bash\nTEST_HOST_PATH="' + host + '"\n', encoding="utf-8")
+        manifest = runner.with_name(runner.name + ".runfiles_manifest")
+        manifest.write_text("_main/" + host + " " + str(artifact) + "\n", encoding="utf-8")
+        return runner, manifest
+
+    def create_ipa(self, app, ipa):
+        ipa.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(ipa, "w") as archive:
+            for file in app.rglob("*"):
+                if file.is_file():
+                    archive.write(file, "Payload/Telegram.app/" + file.relative_to(app).as_posix())
+
+    def create_alias(self, alias, physical):
+        if os.name == "nt":
+            # Directory junctions need no symbolic-link privilege on Windows.
+            subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                "New-Item -ItemType Junction -Path $env:DRAFT_TEST_ALIAS -Target $env:DRAFT_TEST_PHYSICAL | Out-Null"],
+                env={**os.environ, "DRAFT_TEST_ALIAS": str(alias), "DRAFT_TEST_PHYSICAL": str(physical)},
+                check=True, capture_output=True)
+        else:
+            alias.symlink_to(physical, target_is_directory=True)
 
     def create_app(self, app):
         for prefix, identifier, executable in (("", self.bundle_id, "Telegram"),
@@ -262,19 +290,116 @@ class BinaryProvenanceTests(unittest.TestCase):
             root = Path(temporary)
             app = root / "Devices" / self.udid / "data/Containers/Bundle/Application" / self.application / "Telegram.app"
             self.create_app(app)
-            outputs = root / "checkout/bazel-bin/Telegram"
-            outputs.mkdir(parents=True)
-            with zipfile.ZipFile(outputs / "Telegram.ipa", "w") as archive:
-                for file in app.rglob("*"):
-                    if file.is_file():
-                        archive.write(file, "Payload/Telegram.app/" + file.relative_to(app).as_posix())
-            built = capture.built_binary_inventory(root / "checkout", self.bundle_id)
+            checkout = root / "checkout"
+            ipa = checkout / "bazel-out/ios_sim_arm64-dbg-transition/bin/Telegram/Telegram.ipa"
+            self.create_ipa(app, ipa)
+            self.create_runner(checkout, ipa)
+            # A stale app-target output must never win over the UI test's host.
+            stale = checkout / "bazel-bin/Telegram/Telegram.ipa"
+            stale.parent.mkdir()
+            stale.write_bytes(b"stale prior app build")
+            built = capture.built_binary_inventory(checkout, self.bundle_id, self.target)
             result = capture.verify_installed_binaries(app, root / "Devices", self.udid, self.bundle_id, built)
             self.assertEqual(result["status"], "matched")
             self.assertEqual(len(result["files"]), 6)
             self.assertEqual(result["udid"], self.udid)
             self.assertEqual(result["files"][1]["sha256"], hashlib.sha256((app / "Telegram").read_bytes()).hexdigest())
             self.assertNotIn(str(root), json.dumps(result))
+            self.assertEqual(built["source"], "bazel-out/ios_sim_arm64-dbg-transition/bin/Telegram/Telegram.ipa")
+            self.assertEqual(built["declared_test_host"], "Telegram/Telegram.ipa")
+            self.assertEqual(built["test_target"], self.target)
+
+    def test_device_root_alias_matches_but_inner_device_alias_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            physical = root / "physical"
+            physical.mkdir()
+            alias = root / "alias"
+            self.create_alias(alias, physical)
+            devices = physical / "Devices"
+            app = devices / self.udid / "data/Containers/Bundle/Application" / self.application / "Telegram.app"
+            self.create_app(app)
+            aliased_app = alias / app.relative_to(physical)
+            # Model /var and /private/var spellings in both directions.
+            self.assertEqual(capture.owned_app_container(aliased_app, devices, self.udid), app)
+            self.assertEqual(capture.owned_app_container(app, alias / "Devices", self.udid), app)
+            other_container = app.parent.with_name("B3159F14-508D-4CB9-946D-84ED2F4FEFAE")
+            self.create_alias(other_container, app.parent)
+            with self.assertRaises(capture.package.PackageError):
+                capture.owned_app_container(other_container / "Telegram.app", devices, self.udid)
+
+    def test_manifest_cannot_select_an_outside_or_ambiguous_test_host(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            checkout = root / "checkout"
+            ipa = checkout / "bazel-out/ios-transition/bin/Telegram/Telegram.ipa"
+            ipa.parent.mkdir(parents=True)
+            ipa.write_bytes(b"host")
+            runner, manifest = self.create_runner(checkout, ipa)
+            valid = manifest.read_text(encoding="utf-8")
+            outside = root / "outside/Telegram.ipa"
+            outside.parent.mkdir()
+            outside.write_bytes(b"not this Bazel output")
+            for mapping in (valid + valid, "_main/Telegram/Telegram.ipa " + str(outside) + "\n",
+                            "_main/Telegram/Telegram.ipa relative/Telegram.ipa\n", "_main/other.ipa " + str(ipa) + "\n"):
+                manifest.write_text(mapping, encoding="utf-8")
+                with self.subTest(mapping=mapping), self.assertRaises(capture.package.PackageError):
+                    capture.declared_test_host(checkout, self.target)
+            manifest.write_text(valid, encoding="utf-8")
+            for host in ("../Telegram/Telegram.ipa", "$(pwd)/Telegram.ipa", "/Telegram/Telegram.ipa"):
+                runner.write_text('TEST_HOST_PATH="' + host + '"\n', encoding="utf-8")
+                with self.subTest(host=host), self.assertRaises(capture.package.PackageError):
+                    capture.declared_test_host(checkout, self.target)
+            runner.write_text('TEST_HOST_PATH="Telegram/Telegram.ipa"\n' * 2, encoding="utf-8")
+            with self.assertRaises(capture.package.PackageError):
+                capture.declared_test_host(checkout, self.target)
+
+    def test_manifest_paths_with_spaces_and_escaped_records_select_one_exact_app(self):
+        with tempfile.TemporaryDirectory(prefix="draft pocket ") as temporary:
+            checkout = Path(temporary).resolve() / "checkout"
+            app = checkout / "bazel-out/ios-transition/bin/Telegram/Telegram.app"
+            self.create_app(app)
+            _, manifest = self.create_runner(checkout, app, "Telegram/Telegram.app")
+            expected = capture.directory_binary_inventory(app, self.bundle_id)
+            escaped_path = str(app).replace("\\", "\\b")
+            # Bazel escapes spaces in logical keys, but leaves target spaces
+            # literal: consumers split the record only at the first separator.
+            auxiliary = " _main/auxiliary\\sdata " + escaped_path + "\n"
+            for mapping in (manifest.read_text(encoding="utf-8") + auxiliary,
+                            " _main/Telegram/Telegram.app " + escaped_path + "\n",
+                            " _main/Telegram/Telegram.app " + escaped_path.replace(" ", "\\s") + "\n"):
+                manifest.write_text(mapping, encoding="utf-8")
+                built = capture.built_binary_inventory(checkout, self.bundle_id, self.target)
+                self.assertEqual(built["files"], expected["files"])
+
+    def test_external_bazel_output_links_use_the_transitioned_declared_host(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            checkout = root / "checkout"
+            checkout.mkdir()
+            outputs = root / "external-cache/execroot/_main/bazel-out"
+            host_bin = outputs / "darwin_arm64-dbg/bin"
+            host_bin.mkdir(parents=True)
+            self.create_alias(checkout / "bazel-bin", host_bin)
+            self.create_alias(checkout / "bazel-out", outputs)
+            app = outputs / "ios_sim_arm64-dbg-transition/bin/Telegram/Telegram.app"
+            self.create_app(app)
+            self.create_runner(checkout, app, "Telegram/Telegram.app")
+            built = capture.built_binary_inventory(checkout, self.bundle_id, self.target)
+            self.assertEqual(built["source"], "bazel-out/ios_sim_arm64-dbg-transition/bin/Telegram/Telegram.app")
+            self.assertEqual(len(built["files"]), 6)
+            self.assertFalse((host_bin / "Telegram").exists())
+
+    def test_manifest_artifact_links_below_output_root_are_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            checkout = Path(temporary).resolve() / "checkout"
+            app = checkout / "bazel-out/physical/bin/Telegram/Telegram.app"
+            self.create_app(app)
+            alias = checkout / "bazel-out/alias"
+            self.create_alias(alias, checkout / "bazel-out/physical")
+            self.create_runner(checkout, alias / "bin/Telegram/Telegram.app", "Telegram/Telegram.app")
+            with self.assertRaises(capture.package.PackageError):
+                capture.declared_test_host(checkout, self.target)
 
     def test_changed_executable_or_metadata_is_not_provenance(self):
         for name in ("Telegram", "Info.plist", "Frameworks/TelegramCoreFramework.framework/TelegramCoreFramework"):
@@ -310,17 +435,18 @@ class BinaryProvenanceTests(unittest.TestCase):
 
     def test_missing_build_artifact_and_archive_symlink_are_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            outputs = root / "bazel-bin/Telegram"
+            root = Path(temporary).resolve()
+            outputs = root / "bazel-out/ios-transition/bin/Telegram"
             outputs.mkdir(parents=True)
+            self.create_runner(root, outputs / "Telegram.ipa")
             with self.assertRaises(capture.package.PackageError):
-                capture.built_binary_inventory(root, self.bundle_id)
+                capture.built_binary_inventory(root, self.bundle_id, self.target)
             with zipfile.ZipFile(outputs / "Telegram.ipa", "w") as archive:
                 entry = zipfile.ZipInfo("Payload/Telegram.app/Info.plist")
                 entry.external_attr = (0o120777 << 16)
                 archive.writestr(entry, b"outside")
             with self.assertRaises(capture.package.PackageError):
-                capture.built_binary_inventory(root, self.bundle_id)
+                capture.built_binary_inventory(root, self.bundle_id, self.target)
 
 
 if __name__ == "__main__":

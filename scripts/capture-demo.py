@@ -114,13 +114,85 @@ def directory_binary_inventory(app, bundle_id):
     return app_binary_inventory(read_plist, hash_file, bundle_id)
 
 
-def built_binary_inventory(checkout, bundle_id):
-    # The pinned Make.py uses this exact IPA output. Hash it after buildOnly,
-    # so its build number/configuration matches the test host, not an earlier build.
-    outputs = (checkout / "bazel-bin/Telegram").resolve(strict=True)
-    ipa, app = outputs / "Telegram.ipa", outputs / "Telegram.app"
-    if ipa.is_file():
-        with zipfile.ZipFile(ipa) as archive:
+def declared_test_host(checkout, target):
+    """Resolve the pinned rules_apple runner's host through its own Bazel manifest."""
+    if not isinstance(target, str) or not re.fullmatch(r"//[A-Za-z0-9_/.-]+:[A-Za-z0-9_.-]+", target):
+        raise package.PackageError("Capture requires a main-repository Bazel test target")
+    target_path = package.relative(target[2:].replace(":", "/"))
+    # bazel-bin identifies the generated test executable, not the transitioned
+    # iOS app. rules_apple expands AppleTestInfo.test_host.short_path into this
+    # executable and adds that exact artifact to its runfiles.
+    runner = package.bounded(checkout / "bazel-bin", target_path)
+    manifest = package.bounded(runner.parent, runner.name + ".runfiles_manifest")
+    if not runner.is_file() or runner.stat().st_size > 2 * 1024 ** 2:
+        raise package.PackageError("Fresh test build lacks its generated runner")
+    declarations = re.findall(r'^TEST_HOST_PATH="([^"\r\n]*)"$', runner.read_text(encoding="utf-8"), re.MULTILINE)
+    if len(declarations) != 1 or not re.fullmatch(r"[A-Za-z0-9_./+-]+", declarations[0]):
+        raise package.PackageError("Generated test runner has no unique literal test-host declaration")
+    host = package.relative(declarations[0])
+    if Path(host).name not in ("Telegram.ipa", "Telegram.app"):
+        raise package.PackageError("Generated test runner does not declare the Telegram test host")
+    if not manifest.is_file() or manifest.stat().st_size > 64 * 1024 ** 2:
+        raise package.PackageError("Fresh test build lacks its bounded runfiles input manifest")
+
+    # Bazel 9's Bzlmod main repository is _main. SourceManifestAction writes
+    # absolute artifact paths, splitting at the first space; escaped records
+    # begin with a space and use \\s, \\n and \\b. Never evaluate the shell script.
+    logical_host = "_main/" + host
+    matches = []
+    def unescape(value):
+        if re.search(r"\\(?![snb])", value):
+            raise package.PackageError("Unsupported escape in test-host runfiles mapping")
+        return re.sub(r"\\([snb])", lambda match: {"s": " ", "n": "\n", "b": "\\"}[match[1]], value)
+
+    with manifest.open(encoding="utf-8") as stream:
+        for line in stream:
+            line = line.rstrip("\r\n")
+            escaped = line.startswith(" ")
+            key, separator, value = (line[1:] if escaped else line).partition(" ")
+            if escaped:
+                key = unescape(key)
+            if key == logical_host:
+                if not separator:
+                    raise package.PackageError("Test-host runfiles mapping lacks its artifact path")
+                matches.append(unescape(value) if escaped else value)
+    if len(matches) != 1 or any(ord(char) < 32 for char in matches[0]):
+        raise package.PackageError("Runfiles manifest does not uniquely identify the declared test host")
+    artifact = Path(matches[0])
+    output_root = (checkout / "bazel-out").resolve(strict=True)
+    if not artifact.is_absolute():
+        raise package.PackageError("Test-host runfiles artifact must be absolute")
+    try:
+        # Resolve only the trusted output-root prefix (including /var aliases),
+        # then reject links anywhere below it, rather than accepting an escape.
+        physical = artifact.resolve(strict=True)
+        output_path = physical.relative_to(output_root)
+        count = len(output_path.parts)
+        if count == 0 or artifact.parents[count - 1].resolve(strict=True) != output_root:
+            raise ValueError("Unexpected output-root alias")
+        output_path = Path(*artifact.parts[-count:])
+    except (OSError, IndexError, ValueError):
+        raise package.PackageError("Declared test host is outside the current Bazel output root") from None
+    artifact = package.bounded(output_root, output_path.as_posix())
+    if (artifact.name != Path(host).name
+            or (artifact.suffix == ".ipa" and not artifact.is_file())
+            or (artifact.suffix == ".app" and not artifact.is_dir())):
+        raise package.PackageError("Declared test-host artifact is missing or has an unexpected type")
+    return artifact, {
+        "source": "bazel-out/" + output_path.as_posix(),
+        "test_target": target,
+        "declared_test_host": host,
+        "test_runner_sha256": package.digest(runner.read_bytes()),
+        "runfiles_manifest_sha256": package.digest(manifest.read_bytes()),
+    }
+
+
+def built_binary_inventory(checkout, bundle_id, target):
+    # Hash the host selected by this freshly built test, including its iOS
+    # configuration transition. An earlier //Telegram:Telegram build can differ.
+    artifact, identity = declared_test_host(checkout, target)
+    if artifact.suffix == ".ipa":
+        with zipfile.ZipFile(artifact) as archive:
             entries = {}
             for entry in archive.infolist():
                 name = entry.filename
@@ -149,24 +221,26 @@ def built_binary_inventory(checkout, bundle_id):
                     return hash_stream(stream, entry.file_size)
 
             result = app_binary_inventory(read_plist, hash_file, bundle_id)
-        return {"source": "bazel-bin/Telegram/Telegram.ipa", **result}
-    if app.is_dir():
-        return {"source": "bazel-bin/Telegram/Telegram.app", **directory_binary_inventory(app, bundle_id)}
-    raise package.PackageError("Fresh test build has no Telegram IPA/app for binary provenance")
+        return {**identity, **result}
+    return {**identity, **directory_binary_inventory(artifact, bundle_id)}
 
 
 def owned_app_container(path, simulator_home, udid):
     canonical_udid = str(uuid.UUID(udid)).upper()
-    root = package.bounded(simulator_home, canonical_udid + "/data/Containers/Bundle/Application")
+    root = simulator_home.resolve(strict=True)
     candidate = Path(path)
     if not candidate.is_absolute():
         raise package.PackageError("Simulator returned a relative app container")
     try:
-        relative = candidate.relative_to(root)
-        if len(relative.parts) != 2 or candidate.suffix != ".app":
+        # macOS may return /var while tempfile/the caller uses /private/var.
+        # Canonicalize only the Devices-root prefix, never links within a device.
+        relative = Path(*candidate.parts[-7:])
+        if (candidate.parents[6].resolve(strict=True) != root
+                or relative.parts[:5] != (canonical_udid, "data", "Containers", "Bundle", "Application")
+                or candidate.suffix != ".app"):
             raise ValueError("Unexpected app container shape")
-        uuid.UUID(relative.parts[0])
-    except ValueError:
+        uuid.UUID(relative.parts[5])
+    except (OSError, IndexError, ValueError):
         raise package.PackageError("App container is outside the dedicated Simulator") from None
     app = package.bounded(root, relative.as_posix())
     if not app.is_dir():
@@ -590,7 +664,7 @@ def capture(checkout, configuration, cache, artifacts, test_filter):
         if process.wait():
             raise package.PackageError("Demo XCTest target failed to build; recording was not started")
 
-    built_binaries = built_binary_inventory(checkout, config["bundle_id"])
+    built_binaries = built_binary_inventory(checkout, config["bundle_id"], demo["native_test_target"])
     (artifacts / "built-binary-provenance.json").write_text(json.dumps(built_binaries, indent=2) + "\n", encoding="utf-8")
 
     runtimes = json.loads(package.run(["xcrun", "simctl", "list", "runtimes", "--json"]))["runtimes"]

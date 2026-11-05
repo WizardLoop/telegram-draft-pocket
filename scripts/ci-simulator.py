@@ -25,7 +25,7 @@ def main(argv=None):
     status = {"schema_version": 1, "started_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
               "feature_commit": os.environ.get("DRAFT_POCKET_FEATURE_COMMIT"),
               "tested_merge_commit": os.environ.get("GITHUB_SHA"), "upstream_commit": None,
-              "stages": {name: "not_run" for name in ("package_integrity", "toolchain", "configuration", "reconstruction", "build", "native_tests", "capture")}}
+              "stages": {name: "not_run" for name in ("package_integrity", "portable_tests", "toolchain", "configuration", "reconstruction", "build", "native_tests", "capture")}}
     raw_config = os.environ.pop("DRAFT_POCKET_BUILD_CONFIGURATION_JSON", "")
     redactions = [raw_config] if raw_config else []
     last_stage = None
@@ -84,6 +84,13 @@ def main(argv=None):
         status["upstream_commit"] = base["commit"]
         status["patch_sha256"] = manifest["feature"].get("patch", {}).get("sha256")
         status["demo_patch_sha256"] = manifest.get("demo", {}).get("patch", {}).get("sha256")
+        status["stages"][stage] = "passed"
+        stage = "portable_tests"
+        status["stages"][stage] = "running"
+        save()
+        # Catch host-specific packaging failures before reconstruction or the full app build.
+        # Keep the later native invocation unchanged so every existing validation still runs.
+        invoke("portable-tests", [sys.executable, ROOT / "scripts/package.py", "test", *demo_flags])
         status["stages"][stage] = "passed"
         stage = "toolchain"
         status["stages"][stage] = "running"

@@ -2,7 +2,7 @@
 
 Put an unfinished Telegram iOS message aside, answer a quick question, and return to the draft.
 
-**Implementation draft.** An earlier integration built successfully on macOS and passed its two native targets. The expanded package and real demo recording still need native validation. The source is on [`feature/draft-pocket`](https://github.com/WizardLoop/telegram-draft-pocket/tree/feature/draft-pocket) in [Draft PR #1](https://github.com/WizardLoop/telegram-draft-pocket/pull/1), pending review into `main`.
+**Implementation draft.** The expanded integration and its UI test target compile on macOS. The latest attempt stopped in validation/capture tooling before native tests or Simulator interaction; no recording exists yet. The source is on [`feature/draft-pocket`](https://github.com/WizardLoop/telegram-draft-pocket/tree/feature/draft-pocket) in [Draft PR #1](https://github.com/WizardLoop/telegram-draft-pocket/pull/1), pending review into `main`.
 
 ## Demo
 
