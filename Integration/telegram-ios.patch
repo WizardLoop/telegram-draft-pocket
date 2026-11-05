@@ -575,43 +575,41 @@ index e28a2d0f1b2467dc7dc1758bae0f396a8d24c9ae..007549170cb41177c4cb12636eb6dacc
                              context.status = .Remote(progress: 0.0)
                              for f in context.subscribers.copyItems() {
 diff --git a/submodules/Postbox/Sources/Postbox.swift b/submodules/Postbox/Sources/Postbox.swift
-index 5fdf8a8ded8f23c92592814e9072b6d4f8a0c5c1..97e8b04ccd778decb22c7f4fa6cabb3e813c8fb2 100644
+index 5fdf8a8ded8f23c92592814e9072b6d4f8a0c5c1..0973bdc8caf1a83d4d30bfed84c8d8ebbeffd217 100644
 --- a/submodules/Postbox/Sources/Postbox.swift
 +++ b/submodules/Postbox/Sources/Postbox.swift
-@@ -1461,6 +1461,23 @@ func debugRestoreState(basePath: String, name: String) {
- }
- 
- public func openPostbox(basePath: String, seedConfiguration: SeedConfiguration, encryptionParameters: ValueBoxEncryptionParameters, timestampForAbsoluteTimeBasedOperations: Int32, isMainProcess: Bool, isTemporary: Bool, isReadOnly: Bool, useCopy: Bool, useCaches: Bool, removeDatabaseOnError: Bool) -> Signal<PostboxResult, NoError> {
-+    // Retention recovery can wait for a session whose owner needs a Postbox
-+    // transaction to finish. Never acquire that lock on Postbox.sharedQueue.
-+    // Construct the complete MediaBox here and inject it below: preflight alone
-+    // would leave a second, racy lock acquisition inside the Postbox initializer.
-+    let mediaBox = Signal<MediaBox, NoError> { subscriber in
-+        Queue.concurrentBackgroundQueue().async {
-+            subscriber.putNext(MediaBox(basePath: basePath + "/media", isMainProcess: isMainProcess))
-+            subscriber.putCompletion()
-+        }
-+        return EmptyDisposable
-+    }
-+    return mediaBox |> mapToSignal { mediaBox in
-+        return openPostboxWithMediaBox(basePath: basePath, seedConfiguration: seedConfiguration, encryptionParameters: encryptionParameters, timestampForAbsoluteTimeBasedOperations: timestampForAbsoluteTimeBasedOperations, isTemporary: isTemporary, isReadOnly: isReadOnly, useCopy: useCopy, useCaches: useCaches, removeDatabaseOnError: removeDatabaseOnError, mediaBox: mediaBox)
-+    }
-+}
-+
-+private func openPostboxWithMediaBox(basePath: String, seedConfiguration: SeedConfiguration, encryptionParameters: ValueBoxEncryptionParameters, timestampForAbsoluteTimeBasedOperations: Int32, isTemporary: Bool, isReadOnly: Bool, useCopy: Bool, useCaches: Bool, removeDatabaseOnError: Bool, mediaBox: MediaBox) -> Signal<PostboxResult, NoError> {
-     let queue = Postbox.sharedQueue
-     return Signal { subscriber in
-         queue.async {
-@@ -1588,7 +1605,7 @@ public func openPostbox(basePath: String, seedConfiguration: SeedConfiguration,
+@@ -1588,11 +1588,25 @@ public func openPostbox(basePath: String, seedConfiguration: SeedConfiguration,
                  let endTime = CFAbsoluteTimeGetCurrent()
                  postboxLog("Postbox load took \((endTime - startTime) * 1000.0) ms")
                  
 -                subscriber.putNext(.postbox(Postbox(queue: queue, basePath: basePath, seedConfiguration: seedConfiguration, valueBox: valueBox, timestampForAbsoluteTimeBasedOperations: timestampForAbsoluteTimeBasedOperations, isMainProcess: isMainProcess, isTemporary: isTemporary, tempDir: tempDir, useCaches: useCaches)))
-+                subscriber.putNext(.postbox(Postbox(queue: queue, basePath: basePath, mediaBox: mediaBox, seedConfiguration: seedConfiguration, valueBox: valueBox, timestampForAbsoluteTimeBasedOperations: timestampForAbsoluteTimeBasedOperations, isTemporary: isTemporary, tempDir: tempDir, useCaches: useCaches)))
- 
-                 postboxLog("openPostbox, putCompletion")
- 
-@@ -4691,10 +4708,10 @@ public class Postbox {
+-
+-                postboxLog("openPostbox, putCompletion")
+-
+-                subscriber.putCompletion()
++                // Keep the original database/error checks ahead of MediaBox: its
++                // storage initialization assumes a usable account directory.
++                // Upgrades have committed; no SQLite transaction spans recovery.
++                let openedValueBox = valueBox
++                let preparedValueBox = QueueLocalObject(queue: queue, generate: { openedValueBox })
++                let preparedTempDir = tempDir
++                Queue.concurrentBackgroundQueue().async {
++                    // A retention session owner can need this Postbox queue to
++                    // commit. Wait off-queue, then inject the recovered instance.
++                    let mediaBox = MediaBox(basePath: basePath + "/media", isMainProcess: isMainProcess)
++                    preparedValueBox.with { valueBox in
++                        subscriber.putNext(.postbox(Postbox(queue: queue, basePath: basePath, mediaBox: mediaBox, seedConfiguration: seedConfiguration, valueBox: valueBox, timestampForAbsoluteTimeBasedOperations: timestampForAbsoluteTimeBasedOperations, isTemporary: isTemporary, tempDir: preparedTempDir, useCaches: useCaches)))
++                        postboxLog("openPostbox, putCompletion")
++                        subscriber.putCompletion()
++                    }
++                }
++                // Like the original EmptyDisposable startup, an already-started
++                // open finishes if its observer leaves. QueueLocalObject also
++                // guarantees SQLite releases on its queue on that path.
+                 break
+             }
+         }
+@@ -4691,10 +4705,10 @@ public class Postbox {
      init(
          queue: Queue,
          basePath: String,
@@ -623,7 +621,7 @@ index 5fdf8a8ded8f23c92592814e9072b6d4f8a0c5c1..97e8b04ccd778decb22c7f4fa6cabb3e
          isTemporary: Bool,
          tempDir: TempBoxDirectory?,
          useCaches: Bool
-@@ -4704,7 +4721,7 @@ public class Postbox {
+@@ -4704,7 +4718,7 @@ public class Postbox {
          self.seedConfiguration = seedConfiguration
  
          postboxLog("MediaBox path: \(basePath + "/media")")

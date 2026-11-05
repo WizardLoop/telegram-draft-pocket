@@ -22,9 +22,9 @@ final class DraftPocketMediaLifecycleTests: XCTestCase {
         }
     }
 
-    private func opening(_ directory: URL) throws -> Signal<PostboxResult, NoError> {
+    private func opening(_ directory: URL, isReadOnly: Bool = false) throws -> Signal<PostboxResult, NoError> {
         let encryption = ValueBoxEncryptionParameters(forceEncryptionIfNoSet: false, key: try XCTUnwrap(.init(data: Data(count: 32))), salt: try XCTUnwrap(.init(data: Data(count: 16))))
-        return openPostbox(basePath: directory.path, seedConfiguration: telegramPostboxSeedConfiguration, encryptionParameters: encryption, timestampForAbsoluteTimeBasedOperations: 1000, isMainProcess: true, isTemporary: false, isReadOnly: false, useCopy: false, useCaches: true, removeDatabaseOnError: false)
+        return openPostbox(basePath: directory.path, seedConfiguration: telegramPostboxSeedConfiguration, encryptionParameters: encryption, timestampForAbsoluteTimeBasedOperations: 1000, isMainProcess: true, isTemporary: false, isReadOnly: isReadOnly, useCopy: false, useCaches: true, removeDatabaseOnError: false)
             |> filter { result in
                 if case .upgrading = result { return false }
                 return true
@@ -162,6 +162,32 @@ final class DraftPocketMediaLifecycleTests: XCTestCase {
             DraftPocketMediaOwnership.commitEncoded(encoded, transaction: transaction)
             transaction.setPeerChatInterfaceState(self.peerId, state: StoredPeerChatInterfaceState(overrideChatTimestamp: nil, historyScrollMessageIndex: nil, associatedMessageIds: [], data: token))
         }
+    }
+
+    func testReadOnlyInvalidPathsFailBeforeMediaBoxInitialization() throws {
+        let bytes = Data("read-only path obstruction".utf8)
+        let baseFile = self.directory.appendingPathComponent("read-only-base-file")
+        try bytes.write(to: baseFile)
+        let baseResult = try self.value(self.opening(baseFile, isReadOnly: true), description: "read-only open with a regular-file base path")
+        guard case .error = baseResult else {
+            return XCTFail("A regular-file base path must report a read-only open error")
+        }
+        XCTAssertEqual(try Data(contentsOf: baseFile), bytes)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: baseFile.appendingPathComponent("media").path))
+
+        // This parent is writable, so constructing MediaBox prematurely would
+        // create media files even though SQLite must reject the blocked db path.
+        let blockedDatabase = self.directory.appendingPathComponent("read-only-blocked-database")
+        try FileManager.default.createDirectory(at: blockedDatabase, withIntermediateDirectories: true)
+        let databaseFile = blockedDatabase.appendingPathComponent("db")
+        try bytes.write(to: databaseFile)
+        let databaseResult = try self.value(self.opening(blockedDatabase, isReadOnly: true), description: "read-only open with a regular-file database directory")
+        guard case .error = databaseResult else {
+            return XCTFail("A blocked database directory must report a read-only open error")
+        }
+        XCTAssertEqual(try Data(contentsOf: databaseFile), bytes)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: blockedDatabase.path).sorted(), ["db"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: blockedDatabase.appendingPathComponent("media").path))
     }
 
     func testLocalFileReferenceSurvivesDeletedExternalPathColdReopenAndForcedCleanup() throws {

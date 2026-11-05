@@ -73,7 +73,7 @@
         "action": "copy",
         "source": "submodules/TelegramCore/Tests/DraftPocketMediaLifecycleTests.swift",
         "target": "submodules/TelegramCore/Tests/DraftPocketMediaLifecycleTests.swift",
-        "sha256": "48b788bc018559adc50113c6942f292d703df96888f903150397389f1b1a0aea"
+        "sha256": "8b963e533164b3e5e8250b7a02c457621c2fcdb39518e258bf5133a194a99589"
       },
       {
         "action": "copy",
@@ -132,7 +132,7 @@
     ],
     "patch": {
       "source": "Integration/telegram-ios.patch",
-      "sha256": "479488d6d58c26ae40023d4346ebecdc73fa8f63da3e7a247eaf1242506b08b6",
+      "sha256": "662d50879b90c64c2b3a28a4d64774bd3fd1b9f62308b395afc8c497abeb5719",
       "files": [
         {
           "action": "modify",
@@ -192,7 +192,7 @@
           "action": "modify",
           "target": "submodules/Postbox/Sources/Postbox.swift",
           "before_sha256": "71ce7879969134652ceb1ea82f9fe56670977033d148b50a5fd76bfec716e231",
-          "after_sha256": "3497c7ade9d2ef57b73f7d41b6743a734b50446408a40065706828c12048521a"
+          "after_sha256": "65ecb1f7c52966adfbcadcca396dd2230c5aeb08902bd5bd91568131e6e24f4b"
         },
         {
           "action": "modify",
