@@ -22,7 +22,7 @@ final class DocumentTextSelectionTests: XCTestCase {
                                                                   in: DocumentTree.build(from: document)))
         editor.canvas.setSelectionForTesting(anchor: global, head: global)
         let captured = try XCTUnwrap(editor.documentTextSelection)
-        XCTAssertEqual(captured.start, DocumentTextPosition(ref: .paragraph(BlockID("right")), offset: 2, affinity: .downstream))
+        XCTAssertEqual(captured.start, RichTextEditorCore.DocumentTextPosition(ref: .paragraph(BlockID("right")), offset: 2, affinity: .downstream))
         editor.document = Document(blocks: [.paragraph(ParagraphBlock(id: BlockID("other"), runs: [TextRun(text: "other")]))])
         editor.document = document
         XCTAssertTrue(editor.setDocumentTextSelection(captured))
@@ -52,8 +52,8 @@ final class DocumentTextSelectionTests: XCTestCase {
         let editor = RichTextEditorView(frame: CGRect(x: 0, y: 0, width: 320, height: 400))
         editor.document = tableDocument()
         let before = editor.canvas.canonicalSelection
-        let invalid = DocumentTextPosition(ref: .paragraph(BlockID("right")), offset: 100)
-        XCTAssertFalse(editor.setDocumentTextSelection(DocumentTextSelection(start: invalid, end: invalid)))
+        let invalid = RichTextEditorCore.DocumentTextPosition(ref: .paragraph(BlockID("right")), offset: 100)
+        XCTAssertFalse(editor.setDocumentTextSelection(RichTextEditorCore.DocumentTextSelection(start: invalid, end: invalid)))
         XCTAssertEqual(editor.canvas.canonicalSelection, before)
         editor.canvas.tableSelection = (BlockID("table"), .rows(0 ... 0))
         XCTAssertNil(editor.documentTextSelection)

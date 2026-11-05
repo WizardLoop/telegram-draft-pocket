@@ -115,7 +115,7 @@
         "action": "copy",
         "source": "submodules/TelegramUI/Components/RichTextEditor/Tests/RichTextEditorUIKitTests/DocumentTextSelectionTests.swift",
         "target": "submodules/TelegramUI/Components/RichTextEditor/Tests/RichTextEditorUIKitTests/DocumentTextSelectionTests.swift",
-        "sha256": "6868f2d6f9ed83346ad575472302b80b112a4808a41561d97b280c904f4588e7"
+        "sha256": "ece70b5ab1c5a318d98dda3dc3f512d0bda2ec640012e3de1f6daa01149b29b3"
       },
       {
         "action": "copy",
