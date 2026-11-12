@@ -49,6 +49,8 @@ jobs:
         with:
           python-version: '3.13'
       - name: Verify exact toolchain, reconstruct, build, test and attempt real capture
+        # Leave time for failure evidence upload before the job's hard limit.
+        timeout-minutes: 110
         env:
           DRAFT_POCKET_BUILD_CONFIGURATION_JSON: ${{ secrets.DRAFT_POCKET_BUILD_CONFIGURATION_JSON }}
           DRAFT_POCKET_FEATURE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -81,6 +83,7 @@ jobs:
         with:
           python-version: '3.13'
       - name: Run the three native legacy editor selection tests
+        timeout-minutes: 35
         env:
           DRAFT_POCKET_FEATURE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python3 scripts/editor-simulator.py --artifacts "$RUNNER_TEMP/draft-pocket-editor-evidence"

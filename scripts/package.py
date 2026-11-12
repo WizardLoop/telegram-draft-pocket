@@ -584,9 +584,17 @@ def validate_configuration(config):
 
 
 def make_command(checkout, config, cache, command):
-    return [sys.executable, checkout / "build-system/Make/Make.py", "--cacheDir", cache,
+    cache_arguments = ["--cacheDir", cache] if cache is not None else []
+    return [sys.executable, checkout / "build-system/Make/Make.py", *cache_arguments,
             command, "--configurationPath", config, "--xcodeManagedCodesigning",
             "--disableProvisioningProfiles"]
+
+
+def add_cache_arguments(parser, *, required=False):
+    group = parser.add_mutually_exclusive_group(required=required)
+    group.add_argument("--cache", type=Path, help="Use this explicit upstream disk cache directory")
+    group.add_argument("--no-disk-cache", action="store_true",
+                       help="Omit upstream --cacheDir; keep normal build outputs without an additional disk cache")
 
 
 def run_native_tests(checkout, configuration, cache, targets, simulator_config=None, artifacts=None):
@@ -707,17 +715,20 @@ def main(argv=None):
     build = sub.add_parser("build", help="Build the reconstructed iOS Simulator client through upstream Make.py")
     build.add_argument("checkout", type=Path)
     build.add_argument("--configuration", type=Path, required=True)
-    build.add_argument("--cache", type=Path, required=True)
+    add_cache_arguments(build, required=True)
     build.add_argument("--build-number", type=int, required=True, help="Use a new build number for every installed build")
     build.add_argument("--with-demo", action="store_true")
     test = sub.add_parser("test", help="Run packaging tests; optionally run the real native feature targets")
     test.add_argument("--native", action="store_true")
     test.add_argument("--checkout", type=Path)
     test.add_argument("--configuration", type=Path)
-    test.add_argument("--cache", type=Path)
+    add_cache_arguments(test)
     test.add_argument("--artifacts", type=Path, help="Preserve owned native Simulator lifecycle and per-target results")
     test.add_argument("--with-demo", action="store_true")
     args = parser.parse_args(argv)
+    if args.command == "test" and args.native:
+        if not args.checkout or not args.configuration or (args.cache is None and not args.no_disk_cache):
+            parser.error("Native tests require --checkout, --configuration and either --cache or --no-disk-cache")
     if hasattr(args, "checkout") and args.checkout and args.command != "bootstrap":
         args.checkout = args.checkout.resolve()
     if args.command == "bootstrap":
@@ -740,7 +751,8 @@ def main(argv=None):
         toolchain(ROOT, args.checkout, args.configuration, args.with_demo)
         if args.build_number <= 0:
             raise PackageError("Build number must be positive")
-        command = make_command(args.checkout, args.configuration.resolve(), args.cache.resolve(), "build")
+        command = make_command(args.checkout, args.configuration.resolve(),
+                               args.cache.resolve() if args.cache is not None else None, "build")
         run(command + ["--buildNumber", args.build_number, "--configuration", "debug_sim_arm64"], cwd=args.checkout, capture=False)
     elif args.command == "test":
         suite = unittest.defaultTestLoader.discover(str(ROOT / "Tests"), pattern="test_*.py")
@@ -749,10 +761,9 @@ def main(argv=None):
             raise PackageError("Packaging tests failed or no tests ran")
         validate_package(ROOT, args.with_demo)
         if args.native:
-            if not args.checkout or not args.configuration or not args.cache:
-                raise PackageError("Native tests require --checkout, --configuration and --cache")
             base = toolchain(ROOT, args.checkout, args.configuration, args.with_demo)
-            run_native_tests(args.checkout, args.configuration.resolve(), args.cache.resolve(), base.get("native_test_targets", []),
+            run_native_tests(args.checkout, args.configuration.resolve(),
+                             args.cache.resolve() if args.cache is not None else None, base.get("native_test_targets", []),
                              simulator_config=base.get("native_test_simulator"), artifacts=args.artifacts)
         else:
             print("Packaging tests PASS. Native feature tests, iOS build, UI/runtime and capture NOT RUN.")

@@ -208,19 +208,42 @@ class SimulatorFlowTests(unittest.TestCase):
         manifest = {"feature": {"patch": {"sha256": "c" * 64}},
                     "demo": {"available": with_demo, "patch": {"sha256": "d" * 64}}}
         visited = []
+        self.guard_instances = {}
+
+        def disk_guard(artifacts_path, name, **kwargs):
+            self.assertEqual(artifacts_path, artifacts)
+            self.assertEqual(kwargs, {"minimum_free_bytes": 1} if name == "native-case-review" else {})
+            guard = mock.Mock()
+            if results.get(name + "-disk-before"):
+                guard.preflight.side_effect = ci.DiskGuardError("Disk reserve exhausted before " + name)
+            if results.get(name + "-disk-after"):
+                guard.raise_if_failed.side_effect = ci.DiskGuardError("Disk reserve exhausted during " + name)
+            self.guard_instances[name] = guard
+            return guard
 
         def start(command, **kwargs):
             self.assertNotIn("DRAFT_POCKET_BUILD_CONFIGURATION_JSON", os.environ)
-            name = "capture" if Path(command[1]).name == "capture-demo.py" else command[2]
+            self.assertIs(kwargs["start_new_session"], True)
+            script = Path(command[1]).name
+            name = "capture" if script == "capture-demo.py" else "native-case-review" if script == "native_evidence.py" else command[2]
             if name == "test":
                 name = "native-tests" if "--native" in command else "portable-tests"
+            if name in ("build", "capture", "native-tests"):
+                self.assertIn("--no-disk-cache", command)
+                self.assertNotIn("--cache", command)
             visited.append(name)
             # Before configuration parsing only the raw secret is in the redaction list.
             # Children never receive it; this synthetic output verifies that early logs still
             # redact an accidental complete-secret echo without requiring parsed credentials.
             echoed_secret = secret_json if name == "portable-tests" else config["api_hash"]
-            return mock.Mock(stdout=iter([f"{name} synthetic output {echoed_secret}\n"]),
-                             wait=mock.Mock(return_value=results.get(name, 0)))
+            def output():
+                yield f"{name} synthetic output {echoed_secret}\n"
+                if results.get(name + "-interrupt"):
+                    raise KeyboardInterrupt()
+                if results.get(name + "-stream-error"):
+                    raise OSError("synthetic output read failed")
+            return mock.Mock(stdout=output(),
+                             wait=mock.Mock(return_value=results.get(name, 0)), poll=mock.Mock(return_value=0))
 
         def tool(command, **kwargs):
             if command[0] == "sw_vers":
@@ -245,6 +268,7 @@ class SimulatorFlowTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(ci.package, "validate_package", return_value=(base, manifest)))
             stack.enter_context(mock.patch.object(ci.package, "run", side_effect=tool))
             stack.enter_context(mock.patch.object(ci.subprocess, "Popen", side_effect=start))
+            stack.enter_context(mock.patch.object(ci, "DiskGuard", side_effect=disk_guard))
             stack.enter_context(mock.patch.object(ci.platform, "system", return_value="Darwin"))
             stack.enter_context(mock.patch.object(ci.platform, "machine", return_value="arm64"))
             stack.enter_context(mock.patch.object(Path, "is_dir", is_dir))
@@ -260,7 +284,7 @@ class SimulatorFlowTests(unittest.TestCase):
     def test_native_failure_preserves_completed_capture_and_exit_stays_failed(self):
         code, status, artifacts, visited = self.attempt({"native-tests": 1})
         self.assertEqual(code, 1)
-        self.assertEqual(visited, ["portable-tests", "bootstrap", "check", "build", "capture", "native-tests"])
+        self.assertEqual(visited, ["portable-tests", "bootstrap", "check", "build", "capture", "native-tests", "native-case-review"])
         self.assertEqual(status["stages"]["portable_tests"], "passed")
         self.assertEqual(status["stages"]["build"], "passed")
         self.assertEqual(status["stages"]["native_tests"], "failed")
@@ -280,12 +304,12 @@ class SimulatorFlowTests(unittest.TestCase):
             self.assertEqual(set(status["stage_times_utc"][stage]), {"running", "failed"})
             self.assertIn(stage + ":", (artifacts / "failure.txt").read_text())
             self.assertTrue((artifacts / (stage + "-failure.txt")).is_file())
-        self.assertEqual(visited[-1], "native-tests")
+        self.assertEqual(visited[-1], "native-case-review")
 
     def test_capture_failure_still_runs_native_tests(self):
         code, status, artifacts, visited = self.attempt({"capture": 1})
         self.assertEqual(code, 1)
-        self.assertEqual(visited, ["portable-tests", "bootstrap", "check", "build", "capture", "native-tests"])
+        self.assertEqual(visited, ["portable-tests", "bootstrap", "check", "build", "capture", "native-tests", "native-case-review"])
         self.assertEqual(status["stages"]["capture"], "failed")
         self.assertEqual(status["stages"]["native_tests"], "passed")
         self.assertEqual(set(status["failures"]), {"capture"})
@@ -323,7 +347,59 @@ class SimulatorFlowTests(unittest.TestCase):
         self.assertTrue(all(value == "passed" for value in status["stages"].values()))
         self.assertNotIn("failures", status)
         self.assertFalse((artifacts / "failure.txt").exists())
-        self.assertEqual(visited, ["portable-tests", "bootstrap", "check", "build", "capture", "native-tests"])
+        self.assertEqual(visited, ["portable-tests", "bootstrap", "check", "build", "capture", "native-tests", "native-case-review"])
+
+    def test_native_exit_success_cannot_override_incomplete_case_evidence(self):
+        code, status, artifacts, visited = self.attempt({"native-case-review": 1})
+        self.assertEqual(code, 1)
+        self.assertEqual(visited[-2:], ["native-tests", "native-case-review"])
+        self.assertEqual(status["stages"]["capture"], "passed")
+        self.assertEqual(status["stages"]["native_tests"], "failed")
+        self.assertIn("native-case-review exited 1", status["failures"]["native_tests"])
+        self.assertTrue((artifacts / "native-case-review.log").is_file())
+
+    def test_native_and_case_review_failures_are_both_preserved(self):
+        code, status, artifacts, visited = self.attempt({"native-tests": 1, "native-case-review": 1})
+        self.assertEqual(code, 1)
+        self.assertEqual(visited[-2:], ["native-tests", "native-case-review"])
+        self.assertIn("native-tests exited 1", status["failures"]["native_tests"])
+        self.assertIn("native-case-review exited 1", status["failures"]["native_tests"])
+        self.assertTrue((artifacts / "native-tests.log").is_file())
+        self.assertTrue((artifacts / "native-case-review.log").is_file())
+
+    def test_low_disk_prevents_build_start_and_preserves_stage_failure(self):
+        code, status, artifacts, visited = self.attempt({"build-disk-before": 1})
+        self.assertEqual(code, 1)
+        self.assertEqual(visited, ["portable-tests", "bootstrap", "check"])
+        self.assertEqual(status["stages"]["build"], "failed")
+        self.assertEqual(status["stages"]["capture"], "not_run")
+        self.assertIn("Disk reserve exhausted before build", (artifacts / "failure.txt").read_text())
+        self.guard_instances["build"].start.assert_not_called()
+        self.guard_instances["build"].stop.assert_called_once_with(terminate=False)
+
+    def test_low_disk_during_native_cannot_pass_and_case_review_still_runs(self):
+        code, status, artifacts, visited = self.attempt({"native-tests-disk-after": 1})
+        self.assertEqual(code, 1)
+        self.assertEqual(visited[-2:], ["native-tests", "native-case-review"])
+        self.assertEqual(status["stages"]["capture"], "passed")
+        self.assertEqual(status["stages"]["native_tests"], "failed")
+        self.assertIn("Disk reserve exhausted during native-tests", status["failures"]["native_tests"])
+        self.guard_instances["native-tests"].stop.assert_called_once_with(terminate=False)
+        self.assertTrue((artifacts / "native-case-review.log").is_file())
+
+    def test_stream_error_cleans_owned_group_even_if_wrapper_already_exited(self):
+        code, status, _, visited = self.attempt({"capture-stream-error": 1})
+        self.assertEqual(code, 1)
+        self.assertEqual(status["stages"]["capture"], "failed")
+        self.assertIn("synthetic output read failed", status["failures"]["capture"])
+        self.guard_instances["capture"].stop.assert_called_once_with(terminate=True)
+        self.assertEqual(visited[-2:], ["native-tests", "native-case-review"])
+
+    def test_interrupt_cleans_owned_group_and_remains_an_interrupt(self):
+        with self.assertRaises(KeyboardInterrupt):
+            self.attempt({"capture-interrupt": 1})
+        self.guard_instances["capture"].stop.assert_called_once_with(terminate=True)
+        self.assertNotIn("native-tests", self.guard_instances)
 
     def test_missing_demo_is_preserved_alongside_native_failure(self):
         code, status, _, visited = self.attempt({"native-tests": 1}, with_demo=False)

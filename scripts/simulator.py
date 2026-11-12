@@ -278,6 +278,30 @@ class SimulatorSession:
         self._run("status-bar", ["xcrun", "simctl", "status_bar", self.udid, "override",
             "--time", "9:41", "--batteryState", "charged", "--batteryLevel", "100"], timeout=60)
 
+    def set_capture_appearance(self, appearance):
+        self._require_owned()
+        if appearance not in ("light", "dark"):
+            raise package.PackageError("Unsupported capture appearance")
+        self.evidence["capture_appearance_request"] = {"requested": appearance, "udid": self.udid, "utc": utc_now()}
+        self._save()
+        self._run("appearance-help", ["xcrun", "simctl", "help", "ui"], timeout=30)
+        self._run("appearance-set", ["xcrun", "simctl", "ui", self.udid, "appearance", appearance], timeout=60)
+        return self.verify_capture_appearance(appearance, "before-test")
+
+    def verify_capture_appearance(self, expected, phase):
+        self._require_owned()
+        if expected not in ("light", "dark") or phase not in ("before-test", "after-test"):
+            raise package.PackageError("Unsupported capture appearance verification")
+        observed = self._run("appearance-" + phase,
+            ["xcrun", "simctl", "ui", self.udid, "appearance"], timeout=60).decode("utf-8").strip()
+        check = {"phase": phase, "requested": expected, "observed": observed[:256],
+                 "utc": utc_now(), "udid": self.udid, "matched": observed == expected}
+        self.evidence.setdefault("capture_appearance_checks", []).append(check)
+        self._save()
+        if not check["matched"]:
+            raise package.PackageError("Simulator appearance readback does not exactly match " + expected)
+        return check
+
     def _shutdown(self, name, *, cleanup=False):
         self._require_owned()
         try:

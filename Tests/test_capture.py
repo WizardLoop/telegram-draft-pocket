@@ -1,6 +1,7 @@
 """Reject plausible-looking recordings that lack real scenario evidence."""
 
 import importlib.util
+from contextlib import ExitStack
 import copy
 import hashlib
 import json
@@ -10,6 +11,7 @@ import plistlib
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 import zipfile
@@ -18,6 +20,167 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 SPEC = importlib.util.spec_from_file_location("capture_demo", Path(__file__).parents[1] / "scripts/capture-demo.py")
 capture = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(capture)
+
+
+class CaptureSelectionTests(unittest.TestCase):
+    def invoke(self, extra):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            argv = ["--checkout", str(root / "checkout"), "--configuration", str(root / "config"),
+                    "--cache", str(root / "cache"), "--artifacts", str(root / "evidence"), *extra]
+            with mock.patch.object(capture, "capture") as run:
+                self.assertEqual(capture.main(argv), 0)
+            return root, run.call_args_list
+
+    def test_default_all_keeps_only_the_two_existing_takes(self):
+        root, calls = self.invoke([])
+        self.assertEqual([(call.args[3].name, call.args[4], call.kwargs) for call in calls], [
+            ("story", "DraftPocketDemoUITests/testCaptureProductionStory", {"appearance": None}),
+            ("qa", "DraftPocketDemoUITests/testQASwapDeleteUndoRestartAndChatIsolation", {"appearance": None})])
+        self.assertTrue(all(call.args[:3] == (root / "checkout", root / "config", root / "cache") for call in calls))
+
+    def test_explicit_opt_in_appends_third_separate_take_using_same_real_qa_filter(self):
+        _, calls = self.invoke(["--include-dark-qa"])
+        self.assertEqual([call.args[3].name for call in calls], ["story", "qa", "qa-dark"])
+        self.assertEqual(calls[1].args[4], calls[2].args[4])
+        self.assertEqual([call.kwargs["appearance"] for call in calls], [None, None, "dark"])
+        self.assertEqual(len({call.args[3] for call in calls}), 3)
+
+    def test_standalone_dark_selection_does_not_run_or_replace_baseline_takes(self):
+        _, calls = self.invoke(["--scenario", "qa-dark"])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0].args[3].name, "qa-dark")
+        self.assertEqual(calls[0].args[4], "DraftPocketDemoUITests/testQASwapDeleteUndoRestartAndChatIsolation")
+        self.assertEqual(calls[0].kwargs, {"appearance": "dark"})
+
+    def test_dark_failure_propagates_to_cli_exit_status(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            argv = ["--checkout", temporary, "--configuration", temporary, "--cache", temporary,
+                    "--artifacts", temporary, "--scenario", "qa-dark"]
+            with mock.patch.object(capture, "capture", side_effect=capture.package.PackageError("readback mismatch")), \
+                    mock.patch("sys.stderr"):
+                self.assertEqual(capture.main(argv), 1)
+
+    def test_conflicting_opt_in_fails_before_capture_or_artifact_creation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "not-created"
+            argv = ["--checkout", temporary, "--configuration", temporary, "--cache", temporary,
+                    "--artifacts", str(root), "--scenario", "qa", "--include-dark-qa"]
+            with mock.patch.object(capture, "capture") as run, mock.patch("sys.stderr"), \
+                    self.assertRaises(SystemExit) as error:
+                capture.main(argv)
+            self.assertEqual(error.exception.code, 2)
+            run.assert_not_called()
+            self.assertFalse(root.exists())
+
+
+class DarkCaptureFlowTests(unittest.TestCase):
+    def run_take(self, artifacts, *, before=b"dark\n", after=b"dark\n", test_code=0):
+        self.selection = "DraftPocketDemoUITests/testQASwapDeleteUndoRestartAndChatIsolation"
+        self.trace = []
+        self.session = capture.SimulatorSession(artifacts)
+        self.session.udid = "CA1C775E-9033-4666-9B09-1E195CA035B5"
+        self.session.runtime = "ios-runtime"
+        self.session._owned = True
+        for name in ("release_build_server", "create", "prepare_framebuffer", "boot", "set_capture_status_bar",
+                     "probe_framebuffer", "cleanup", "health"):
+            setattr(self.session, name, mock.Mock(side_effect=lambda *args, name=name:
+                self.trace.append(name) or (self.session.udid if name == "create" else None)))
+        def phase(name, command, **kwargs):
+            self.trace.append(name)
+            return before if name == "appearance-before-test" else after if name == "appearance-after-test" else b""
+        self.session._run = mock.Mock(side_effect=phase)
+        manifest = {"feature": {"patch": {"sha256": "feature"}}, "demo": {"patch": {"sha256": "demo"},
+            "native_test_target": "//Tests/DraftPocketDemo:DraftPocketDemoUITests", "device_type": "iPhone 17", "os_version": "27.0"}}
+        config = {"api_id": "12345", "api_hash": "owner-secret", "team_id": "LOCALTEAM", "app_center_id": "0", "bundle_id": "org.example.fixture"}
+        events = ["qa_start", "put_aside_start", "put_aside_end", "restore_start", "restore_end",
+                  "delete_start", "delete_end", "undo_start", "undo_end", "qa_end"]
+        recorder = mock.Mock()
+        recorder.poll.return_value = None
+        recorder.wait.side_effect = lambda **kwargs: setattr(recorder.poll, "return_value", 0) or 0
+        def spawn(command, **kwargs):
+            if "--buildOnly" in command:
+                self.trace.append("build")
+                return mock.Mock(stdout=[], wait=lambda: 0)
+            if "recordVideo" in command:
+                self.trace.append("recorder")
+                (artifacts / "draft-pocket-continuous-raw.mov").write_bytes(b"test-video-placeholder")
+                return recorder
+            self.trace.append("xctest")
+            self.assertEqual(command[-6:], ["--target", manifest["demo"]["native_test_target"],
+                "--simulatorUDID", self.session.udid, "--testFilter", self.selection])
+            output = ("DRAFT_POCKET_EVENT " + json.dumps({"event": name, "utc": time.time()}) + "\n" for name in events)
+            return mock.Mock(stdout=output, wait=lambda: test_code)
+        with ExitStack() as stack:
+            def patch(target, name, **kwargs):
+                return stack.enter_context(mock.patch.object(target, name, **kwargs))
+            patch(capture.package, "toolchain")
+            patch(capture.package, "validate_package", return_value=({}, manifest))
+            patch(capture.package.shutil, "which", return_value="tool")
+            patch(capture.package, "load_json", return_value=config)
+            patch(capture.package, "make_command", return_value=["make", "test"])
+            patch(capture.package, "run", return_value=b"/owned/Telegram.app\n")
+            patch(capture, "built_binary_inventory", return_value={"files": []})
+            self.provenance = patch(capture, "verify_installed_binaries", return_value={"matched": True})
+            self.native = patch(capture, "native_results", return_value=[{"identifier": self.selection + "()", "status": "Success"}])
+            self.media = patch(capture, "inspect_media")
+            patch(capture, "SimulatorSession", return_value=self.session)
+            patch(capture.subprocess, "Popen", side_effect=spawn)
+            patch(capture, "wait_for_recorder")
+            patch(capture, "print")
+            capture.capture(artifacts, artifacts / "config", artifacts / "cache", artifacts, self.selection, appearance="dark")
+
+    def test_verified_dark_runs_same_case_on_owned_uuid_and_keeps_all_evidence_gates(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            artifacts = Path(temporary)
+            self.run_take(artifacts)
+            identity = json.loads((artifacts / "capture-identity.json").read_text())
+            self.assertEqual(identity["appearance"]["requested"], "dark")
+            self.assertEqual([check["phase"] for check in identity["appearance"]["checks"]], ["before-test", "after-test"])
+            self.assertTrue(all(check["matched"] and check["udid"] == identity["udid"] for check in identity["appearance"]["checks"]))
+            self.assertEqual(identity["reported_test_cases"], 1)
+            self.assertLess(self.trace.index("boot"), self.trace.index("appearance-set"))
+            self.assertLess(self.trace.index("appearance-before-test"), self.trace.index("recorder"))
+            self.assertLess(self.trace.index("recorder"), self.trace.index("xctest"))
+            self.assertLess(self.trace.index("xctest"), self.trace.index("appearance-after-test"))
+            self.provenance.assert_called_once()
+            self.native.assert_called_once_with(artifacts / "bazel-testlogs/Tests/DraftPocketDemo/DraftPocketDemoUITests",
+                                                artifacts, mock.ANY, self.selection)
+            self.media.assert_called_once()
+            self.session.cleanup.assert_called_once()
+            self.session.create.assert_called_once()
+
+    def test_failed_initial_readback_prevents_recorder_and_xctest_and_cleans_device(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            artifacts = Path(temporary)
+            with self.assertRaisesRegex(capture.package.PackageError, "does not exactly match dark"):
+                self.run_take(artifacts, before=b"light\n")
+            self.assertNotIn("recorder", self.trace)
+            self.assertNotIn("xctest", self.trace)
+            self.assertNotIn("reported_test_cases", json.loads((artifacts / "capture-identity.json").read_text()))
+            self.session.cleanup.assert_called_once()
+
+    def test_reset_appearance_after_successful_case_cannot_pass_capture(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            artifacts = Path(temporary)
+            with self.assertRaisesRegex(capture.package.PackageError, "does not exactly match dark"):
+                self.run_take(artifacts, after=b"light\n")
+            self.assertIn("xctest", self.trace)
+            self.provenance.assert_not_called()
+            self.assertNotIn("reported_test_cases", json.loads((artifacts / "capture-identity.json").read_text()))
+            self.media.assert_called_once()
+            self.session.cleanup.assert_called_once()
+
+    def test_dark_setting_cannot_mask_failed_native_case(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            artifacts = Path(temporary)
+            with self.assertRaisesRegex(capture.package.PackageError, "XCTest failed with exit 7"):
+                self.run_take(artifacts, test_code=7)
+            identity = json.loads((artifacts / "capture-identity.json").read_text())
+            self.assertEqual(identity["xctest_exit_code"], 7)
+            self.assertNotIn("reported_test_cases", identity)
+            self.native.assert_not_called()
+            self.session.cleanup.assert_called_once()
 
 
 class RecorderReadinessTests(unittest.TestCase):

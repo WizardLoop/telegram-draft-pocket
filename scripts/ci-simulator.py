@@ -15,6 +15,7 @@ import sys
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 import package
+from disk_guard import DiskGuard, DiskGuardError
 
 
 def main(argv=None):
@@ -50,17 +51,48 @@ def main(argv=None):
         return text
 
     def invoke(name, command, cwd=None):
-        with (args.artifacts / f"{name}.log").open("w", encoding="utf-8") as log:
-            process = subprocess.Popen([str(v) for v in command], cwd=cwd, stdout=subprocess.PIPE,
-                                       stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
-            for line in process.stdout:
-                clean = redact(line)
-                log.write(clean)
-                log.flush()
-                print(clean, end="", flush=True)
-            code = process.wait()
-        if code:
-            raise package.PackageError(f"{name} exited {code}; see its redacted log")
+        # The tiny read-only case review may use the reserved evidence space
+        # after an expensive stage was stopped; it never starts a build/device.
+        guard = DiskGuard(args.artifacts, name, **({"minimum_free_bytes": 1} if name == "native-case-review" else {}))
+        process, failure = None, None
+        guard_failures = []
+        try:
+            if guard:
+                guard.preflight()
+            with (args.artifacts / f"{name}.log").open("w", encoding="utf-8") as log:
+                process = subprocess.Popen([str(v) for v in command], cwd=cwd, stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", start_new_session=True)
+                if guard:
+                    guard.start(process)
+                for line in process.stdout:
+                    clean = redact(line)
+                    log.write(clean)
+                    log.flush()
+                    print(clean, end="", flush=True)
+                code = process.wait()
+            if code:
+                raise package.PackageError(f"{name} exited {code}; see its redacted log")
+        except BaseException as error:
+            failure = error
+        finally:
+            if guard:
+                try:
+                    guard.stop(terminate=process is not None and (failure is not None or process.poll() is None))
+                except DiskGuardError as error:
+                    guard_failures.append(str(error))
+                try:
+                    guard.raise_if_failed()
+                except DiskGuardError as error:
+                    guard_failures.append(str(error))
+        if isinstance(failure, (KeyboardInterrupt, SystemExit)):
+            for error in guard_failures:
+                print(redact(error), file=sys.stderr, flush=True)
+            raise failure
+        if isinstance(failure, DiskGuardError) or guard_failures:
+            messages = ([str(failure)] if failure is not None else []) + guard_failures
+            raise package.PackageError("; ".join(dict.fromkeys(messages)))
+        if failure is not None:
+            raise failure
 
     def record_failure(name, error):
         message = redact(str(error))
@@ -161,7 +193,7 @@ def main(argv=None):
         save()
         build_number = str(int(os.environ.get("GITHUB_RUN_NUMBER", "1")) * 100 + int(os.environ.get("GITHUB_RUN_ATTEMPT", "1")))
         invoke("build", [sys.executable, ROOT / "scripts/package.py", "build", checkout,
-                         "--configuration", configuration, "--cache", temporary / "draft-pocket-bazel-cache",
+                         "--configuration", configuration, "--no-disk-cache",
                          "--build-number", build_number, *demo_flags])
         status["stages"][stage] = "passed"
         # Capture gets a clean Simulator lane and the available post-build time.
@@ -173,7 +205,7 @@ def main(argv=None):
             if not manifest.get("demo", {}).get("available"):
                 raise package.PackageError("Real demo capture is blocked: the package has no isolated full-client offline fixture. No capture was produced and no account was opened")
             invoke("capture", [sys.executable, ROOT / "scripts/capture-demo.py", "--checkout", checkout,
-                               "--configuration", configuration, "--cache", temporary / "draft-pocket-bazel-cache",
+                               "--configuration", configuration, "--no-disk-cache",
                                "--artifacts", args.artifacts])
         except (package.PackageError, OSError, ValueError, KeyError) as error:
             record_failure(stage, error)
@@ -182,13 +214,27 @@ def main(argv=None):
         stage = "native_tests"
         status["stages"][stage] = "running"
         save()
-        try:
-            invoke("native-tests", [sys.executable, ROOT / "scripts/package.py", "test", "--native",
-                                    "--checkout", checkout, "--configuration", configuration,
-                                    "--cache", temporary / "draft-pocket-bazel-cache",
-                                    "--artifacts", args.artifacts / "native-tests", *demo_flags])
-        except (package.PackageError, OSError, ValueError, KeyError) as error:
-            record_failure(stage, error)
+        native_artifacts = args.artifacts / "native-tests"
+        native_artifacts.mkdir(parents=True, exist_ok=True)
+        native_errors = []
+        native_commands = [
+            ("native-tests", [sys.executable, ROOT / "scripts/package.py", "test", "--native",
+                "--checkout", checkout, "--configuration", configuration,
+                "--no-disk-cache", "--artifacts", native_artifacts, *demo_flags]),
+            ("native-case-review", [sys.executable, ROOT / "scripts/native_evidence.py", "--package", ROOT,
+                "--log", args.artifacts / "native-tests.log",
+                "--targets", native_artifacts / "native-target-results.json",
+                "--output", native_artifacts / "native-case-review.json"]),
+        ]
+        # Preserve exact case evidence even after an unsuccessful target. A
+        # successful Bazel exit cannot hide missing, skipped or retried cases.
+        for name, command in native_commands:
+            try:
+                invoke(name, command)
+            except (package.PackageError, OSError, ValueError, KeyError) as error:
+                native_errors.append(str(error))
+        if native_errors:
+            record_failure(stage, package.PackageError("; ".join(native_errors)))
         else:
             status["stages"][stage] = "passed"
     except (package.PackageError, OSError, ValueError, KeyError) as error:

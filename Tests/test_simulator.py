@@ -146,6 +146,80 @@ class SimulatorSessionTests(unittest.TestCase):
         self.session.cleanup()
         self.assertIsNone(self.state)
 
+    def test_capture_appearance_uses_owned_uuid_and_preserves_exact_before_after_readbacks(self):
+        self.session.create()
+        self.session.boot()
+        def command(args, **kwargs):
+            if args[:3] == ["xcrun", "simctl", "ui"]:
+                self.assertEqual(args[3], self.udid)
+                self.assertEqual(kwargs["timeout"], 60)
+                return subprocess.CompletedProcess(args, 0, stdout=b"dark\n" if len(args) == 5 else b"")
+            return self.command(args, **kwargs)
+        self.run.side_effect = command
+        before = self.session.set_capture_appearance("dark")
+        after = self.session.verify_capture_appearance("dark", "after-test")
+        report = json.loads((self.session.artifacts / "simulator-lifecycle.json").read_text())
+        self.assertEqual(report["capture_appearance_request"]["udid"], self.udid)
+        self.assertEqual(report["capture_appearance_checks"], [before, after])
+        self.assertEqual([check["phase"] for check in (before, after)], ["before-test", "after-test"])
+        self.assertTrue(all(check["matched"] and check["observed"] == "dark" and check["udid"] == self.udid
+                            for check in (before, after)))
+        commands = [call.args[0] for call in self.run.call_args_list if call.args[0][:3] in
+                    (["xcrun", "simctl", "help"], ["xcrun", "simctl", "ui"])]
+        self.assertEqual(commands, [["xcrun", "simctl", "help", "ui"],
+            ["xcrun", "simctl", "ui", self.udid, "appearance", "dark"],
+            ["xcrun", "simctl", "ui", self.udid, "appearance"],
+            ["xcrun", "simctl", "ui", self.udid, "appearance"]])
+
+    def test_capture_appearance_mismatch_is_recorded_and_never_accepted(self):
+        self.session.create()
+        for output in (b"light\n", b"Dark\n", b"dark\nwarning\n", b"", b"unknown\n"):
+            with self.subTest(output=output):
+                self.run.return_value = subprocess.CompletedProcess([], 0, stdout=output)
+                self.run.side_effect = None
+                with self.assertRaisesRegex(package.PackageError, "does not exactly match dark"):
+                    self.session.verify_capture_appearance("dark", "before-test")
+                check = self.session.evidence["capture_appearance_checks"][-1]
+                self.assertFalse(check["matched"])
+                self.assertEqual(check["observed"], output.decode().strip())
+
+    def test_capture_appearance_command_failure_or_timeout_keeps_evidence(self):
+        self.session.create()
+        for phase in ("appearance-set", "appearance-before-test", "appearance-after-test"):
+            for timeout in (False, True):
+                with self.subTest(phase=phase, timeout=timeout):
+                    self.session.evidence["capture_appearance_checks"] = []
+                    def command(args, **kwargs):
+                        is_target = args[:3] == ["xcrun", "simctl", "ui"] and ((len(args) == 6) == (phase == "appearance-set"))
+                        if is_target:
+                            if timeout:
+                                raise subprocess.TimeoutExpired(args, kwargs["timeout"], output=b"service busy")
+                            return subprocess.CompletedProcess(args, 7, stdout=b"appearance unavailable")
+                        return subprocess.CompletedProcess(args, 0, stdout=b"dark\n")
+                    self.run.side_effect = command
+                    with self.assertRaisesRegex(package.PackageError, "exceeded 60s" if timeout else "exited 7"):
+                        if phase == "appearance-after-test":
+                            self.session.verify_capture_appearance("dark", "after-test")
+                        else:
+                            self.session.set_capture_appearance("dark")
+                    failed = self.session.evidence["phases"][-1]
+                    self.assertEqual(failed["name"], phase)
+                    self.assertEqual(failed["status"], "timed_out" if timeout else "failed")
+                    self.assertTrue((self.session.artifacts / failed["log"]).is_file())
+                    self.assertEqual(self.session.evidence["capture_appearance_checks"], [])
+
+    def test_capture_appearance_cannot_address_unowned_device_or_invalid_setting(self):
+        with self.assertRaises(package.PackageError):
+            self.session.set_capture_appearance("dark")
+        self.run.assert_not_called()
+        self.session.create()
+        self.run.reset_mock()
+        for operation in (lambda: self.session.set_capture_appearance("automatic"),
+                          lambda: self.session.verify_capture_appearance("dark", "../phase")):
+            with self.assertRaises(package.PackageError):
+                operation()
+        self.run.assert_not_called()
+
     def test_cleanup_state_timeout_still_deletes_only_owned_device_and_reports_failure(self):
         self.session.create()
         self.state = "Booted"

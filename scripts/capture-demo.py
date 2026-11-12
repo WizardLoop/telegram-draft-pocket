@@ -652,7 +652,11 @@ def wait_for_recorder(recorder, log_path, timeout=30):
         time.sleep(min(0.1, remaining))
 
 
-def capture(checkout, configuration, cache, artifacts, test_filter):
+def capture(checkout, configuration, cache, artifacts, test_filter, *, appearance=None):
+    if appearance not in (None, "dark"):
+        raise package.PackageError("Capture supports only the optional dark QA appearance")
+    if appearance is not None and test_filter != "DraftPocketDemoUITests/testQASwapDeleteUndoRestartAndChatIsolation":
+        raise package.PackageError("Dark capture requires the existing real QA scenario")
     package.toolchain(package.ROOT, checkout, configuration, with_demo=True)
     _, manifest = package.validate_package(package.ROOT, with_demo=True)
     demo = manifest["demo"]
@@ -693,6 +697,8 @@ def capture(checkout, configuration, cache, artifacts, test_filter):
                 "created_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 "scenario": "Fictional offline @wizardloop fixture using the real Telegram client and Pocket implementation"}
     identity["test_filter"] = test_filter
+    if appearance is not None:
+        identity["appearance"] = {"requested": appearance, "checks": []}
     identity_path = artifacts / "capture-identity.json"
     identity_path.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")
     recorder = None
@@ -708,6 +714,9 @@ def capture(checkout, configuration, cache, artifacts, test_filter):
         identity_path.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")
         session.prepare_framebuffer()
         session.boot()
+        if appearance is not None:
+            identity["appearance"]["checks"].append(session.set_capture_appearance(appearance))
+            identity_path.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")
         session.set_capture_status_bar()
         session.probe_framebuffer()
         recorder_path = artifacts / "capture-recorder.log"
@@ -742,6 +751,9 @@ def capture(checkout, configuration, cache, artifacts, test_filter):
             raise package.PackageError("Recorder stopped before XCTest completed; take is incomplete")
         if code:
             raise package.PackageError(f"Real demo XCTest failed with exit {code}; raw evidence retained")
+        if appearance is not None:
+            identity["appearance"]["checks"].append(session.verify_capture_appearance(appearance, "after-test"))
+            identity_path.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")
         container = package.run(["xcrun", "simctl", "get_app_container", udid, config["bundle_id"], "app"]).decode().strip()
         provenance = verify_installed_binaries(container, Path.home() / "Library/Developer/CoreSimulator/Devices",
                                               udid, config["bundle_id"], built_binaries)
@@ -813,23 +825,36 @@ def capture(checkout, configuration, cache, artifacts, test_filter):
         raise error
 
 
-if __name__ == "__main__":
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkout", type=Path, required=True)
     parser.add_argument("--configuration", type=Path, required=True)
-    parser.add_argument("--cache", type=Path, required=True)
+    package.add_cache_arguments(parser, required=True)
     parser.add_argument("--artifacts", type=Path, required=True)
-    parser.add_argument("--scenario", choices=("story", "qa", "all"), default="all")
-    args = parser.parse_args()
+    parser.add_argument("--scenario", choices=("story", "qa", "qa-dark", "all"), default="all")
+    parser.add_argument("--include-dark-qa", action="store_true",
+                        help="With --scenario all, append a third fresh-device QA take in verified dark appearance")
+    args = parser.parse_args(argv)
+    if args.include_dark_qa and args.scenario != "all":
+        parser.error("--include-dark-qa requires --scenario all; use --scenario qa-dark for a standalone dark take")
     args.artifacts.mkdir(parents=True, exist_ok=True)
     try:
-        takes = {"story": "DraftPocketDemoUITests/testCaptureProductionStory",
-                 "qa": "DraftPocketDemoUITests/testQASwapDeleteUndoRestartAndChatIsolation"}
-        for name, test_filter in takes.items():
+        takes = [("story", "DraftPocketDemoUITests/testCaptureProductionStory", None),
+                 ("qa", "DraftPocketDemoUITests/testQASwapDeleteUndoRestartAndChatIsolation", None)]
+        if args.include_dark_qa or args.scenario == "qa-dark":
+            takes.append(("qa-dark", "DraftPocketDemoUITests/testQASwapDeleteUndoRestartAndChatIsolation", "dark"))
+        for name, test_filter, appearance in takes:
             if args.scenario in (name, "all"):
                 destination = args.artifacts.resolve() / name
                 destination.mkdir(parents=True, exist_ok=False)
-                capture(args.checkout.resolve(), args.configuration.resolve(), args.cache.resolve(), destination, test_filter)
+                capture(args.checkout.resolve(), args.configuration.resolve(),
+                        args.cache.resolve() if args.cache is not None else None, destination,
+                        test_filter, appearance=appearance)
     except (package.PackageError, OSError, ValueError, KeyError, zipfile.BadZipFile) as error:
         print("error: " + str(error), file=sys.stderr)
-        sys.exit(1)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
