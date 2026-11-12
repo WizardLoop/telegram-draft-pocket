@@ -8,7 +8,7 @@ Put an unfinished Telegram iOS message aside, answer a quick question, and retur
 
 No video or poster is published. [Capture status](Media/README.md) and [handoff](docs/DOT_HANDOFF.md) identify the missing evidence. This repository does not include a mock chat or fabricated capture.
 
-The latest Mac retry exhausted the runner's disk before it could upload evidence. CI now avoids an extra disposable build cache and reserves space for failure logs; a successful retry is still required.
+A previous Mac retry exhausted the runner's disk before it could upload evidence. CI now avoids an extra disposable build cache and reserves space for failure logs; a successful retry is still required.
 
 ## The interaction
 

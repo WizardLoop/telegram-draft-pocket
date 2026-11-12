@@ -37,7 +37,8 @@ class CaptureSelectionTests(unittest.TestCase):
         self.assertEqual([(call.args[3].name, call.args[4], call.kwargs) for call in calls], [
             ("story", "DraftPocketDemoUITests/testCaptureProductionStory", {"appearance": None}),
             ("qa", "DraftPocketDemoUITests/testQASwapDeleteUndoRestartAndChatIsolation", {"appearance": None})])
-        self.assertTrue(all(call.args[:3] == (root / "checkout", root / "config", root / "cache") for call in calls))
+        expected_paths = tuple((root / name).resolve() for name in ("checkout", "config", "cache"))
+        self.assertTrue(all(call.args[:3] == expected_paths for call in calls))
 
     def test_explicit_opt_in_appends_third_separate_take_using_same_real_qa_filter(self):
         _, calls = self.invoke(["--include-dark-qa"])
