@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 import package
 from disk_guard import DiskGuard, DiskGuardError
+from simulator import select_simulator
 
 
 def main(argv=None):
@@ -129,21 +130,36 @@ def main(argv=None):
         save()
         if platform.system() != "Darwin" or platform.machine() != "arm64":
             raise package.PackageError("The pinned simulator build requires an Apple Silicon macOS runner")
-        macos = package.run(["sw_vers", "-productVersion"]).decode().strip()
+        macos = package.run(["sw_vers", "-productVersion"], timeout=30).decode().strip()
         xcode_path = Path("/Applications") / f"Xcode_{base['versions']['xcode']}.app/Contents/Developer"
         if not xcode_path.is_dir():
             raise package.PackageError(f"Pinned Xcode {base['versions']['xcode']} is not installed; no override/downgrade attempted")
         os.environ["DEVELOPER_DIR"] = str(xcode_path)
-        xcode = package.run(["xcodebuild", "-version"]).decode().strip()
+        xcode = package.run(["xcodebuild", "-version"], timeout=30).decode().strip()
         if xcode.splitlines()[0] != "Xcode " + base["versions"]["xcode"]:
             raise package.PackageError("Installed Xcode differs from the locked version")
         if macos.split(".")[0] != base["versions"]["macos"].split(".")[0]:
             raise package.PackageError("Installed macOS major differs from the pinned toolchain")
         temporary = Path(os.environ.get("RUNNER_TEMP", args.artifacts.parent))
-        runtime_info = json.loads(package.run(["xcrun", "simctl", "list", "runtimes", "--json"]))
-        available_ios = [v for v in runtime_info["runtimes"] if v.get("isAvailable") and v.get("name", "").startswith("iOS ")]
-        if not available_ios:
-            raise package.PackageError("No available iOS Simulator runtime on this runner")
+        simulator_preflight = {"status": "checking", "selections": []}
+        preflight_path = args.artifacts / "simulator-preflight.json"
+        try:
+            runtime_info = json.loads(package.run(["xcrun", "simctl", "list", "runtimes", "--json"], timeout=30))
+            device_info = json.loads(package.run(["xcrun", "simctl", "list", "devicetypes", "--json"], timeout=30))
+            required = [("native", package.native_simulator_spec(base.get("native_test_simulator")))]
+            if with_demo:
+                required.append(("capture", package.native_simulator_spec(
+                    {key: manifest["demo"].get(key) for key in ("device_type", "os_version")})))
+            for lane, specification in required:
+                runtime, device = select_simulator(runtime_info, device_info, **specification)
+                simulator_preflight["selections"].append({"lane": lane, **specification,
+                    "runtime_identifier": runtime["identifier"], "device_identifier": device["identifier"]})
+            simulator_preflight["status"] = "passed"
+        except (package.PackageError, OSError, ValueError, KeyError, TypeError) as error:
+            simulator_preflight.update(status="failed", error=str(error))
+            raise package.PackageError("Exact Simulator preflight failed: " + str(error)) from error
+        finally:
+            preflight_path.write_text(json.dumps(simulator_preflight, indent=2) + "\n", encoding="utf-8")
         if with_demo:
             if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
                 # Runner inventory does not list FFmpeg. Install only in this
@@ -159,7 +175,7 @@ def main(argv=None):
         evidence = {"macos": macos, "architecture": platform.machine(), "xcode": xcode,
                     "runner_image": os.environ.get("ImageVersion"),
                     "free_disk_bytes": shutil.disk_usage(temporary).free,
-                    "ios_runtimes": [{"name": r["name"], "identifier": r["identifier"]} for r in available_ios]}
+                    "simulator_selections": simulator_preflight["selections"]}
         (args.artifacts / "toolchain.json").write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
         status["stages"][stage] = "passed"
         stage = "configuration"

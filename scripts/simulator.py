@@ -18,6 +18,38 @@ def utc_now():
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 
+def select_simulator(runtime_info, device_info, device_type, os_version):
+    """Select the exact compatible inventory entries without creating a device."""
+    if (not isinstance(device_type, str) or not device_type.strip()
+            or not isinstance(os_version, str) or not re.fullmatch(r"\d+\.\d+(?:\.\d+)?", os_version)):
+        raise package.PackageError("Invalid exact Simulator device/runtime request")
+    if (not isinstance(runtime_info, dict) or not isinstance(runtime_info.get("runtimes"), list)
+            or not isinstance(device_info, dict) or not isinstance(device_info.get("devicetypes"), list)):
+        raise package.PackageError("Simulator inventory has invalid runtime/device containers")
+    runtimes, devices = runtime_info["runtimes"], device_info["devicetypes"]
+    if any(not isinstance(item, dict) for item in runtimes + devices):
+        raise package.PackageError("Simulator inventory contains an invalid runtime/device entry")
+    matches = [item for item in runtimes if item.get("isAvailable") is True
+               and item.get("version") == os_version and isinstance(item.get("name"), str)
+               and item["name"].startswith("iOS ")]
+    types = [item for item in devices if item.get("name") == device_type]
+    if len(matches) != 1 or len(types) != 1:
+        raise package.PackageError("The exact Simulator device/runtime is unavailable or ambiguous")
+    runtime, device = matches[0], types[0]
+    if any(not isinstance(item.get("identifier"), str) or not item["identifier"].strip()
+           for item in (runtime, device)):
+        raise package.PackageError("Selected Simulator runtime/device has an invalid identifier")
+    if "supportedDeviceTypes" in runtime:
+        supported = runtime["supportedDeviceTypes"]
+        if (not isinstance(supported, list) or any(not isinstance(item, dict)
+                or not isinstance(item.get("identifier"), str) or not item["identifier"].strip()
+                for item in supported)):
+            raise package.PackageError("Selected Simulator runtime has invalid supported-device metadata")
+        if sum(item["identifier"] == device["identifier"] for item in supported) != 1:
+            raise package.PackageError("The exact Simulator device is unsupported or ambiguous for the selected runtime")
+    return runtime, device
+
+
 class SimulatorSession:
     def __init__(self, artifacts, device_type="iPhone 17", os_version="27.0", label="native", boot_timeout=300):
         if not re.fullmatch(r"[a-z][a-z0-9-]{0,39}", label):
@@ -201,16 +233,12 @@ class SimulatorSession:
     def _create(self):
         if self._owned or self.udid is not None:
             raise package.PackageError("SimulatorSession cannot replace an existing owned device")
-        runtimes = json.loads(self._run("runtimes", ["xcrun", "simctl", "list", "runtimes", "--json"]))["runtimes"]
-        runtime = [item for item in runtimes if item.get("isAvailable") and item.get("version") == self.os_version
-                   and item.get("name", "").startswith("iOS ")]
-        types = json.loads(self._run("device-types", ["xcrun", "simctl", "list", "devicetypes", "--json"]))["devicetypes"]
-        device = [item for item in types if item.get("name") == self.device_type]
-        if len(runtime) != 1 or len(device) != 1:
-            raise package.PackageError("The exact Simulator device/runtime is unavailable or ambiguous")
-        self.runtime = runtime[0]["identifier"]
+        runtime_info = json.loads(self._run("runtimes", ["xcrun", "simctl", "list", "runtimes", "--json"]))
+        device_info = json.loads(self._run("device-types", ["xcrun", "simctl", "list", "devicetypes", "--json"]))
+        runtime, device = select_simulator(runtime_info, device_info, self.device_type, self.os_version)
+        self.runtime = runtime["identifier"]
         result = self._run("create", ["xcrun", "simctl", "create", "Draft Pocket " + self.label + " " + str(uuid.uuid4()),
-                                      device[0]["identifier"], self.runtime]).decode().strip()
+                                      device["identifier"], self.runtime]).decode().strip()
         self.udid = str(uuid.UUID(result)).upper()
         self._owned = True
         self.evidence.update({"udid": self.udid, "runtime": self.runtime})

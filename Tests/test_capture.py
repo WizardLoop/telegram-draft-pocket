@@ -76,7 +76,8 @@ class CaptureSelectionTests(unittest.TestCase):
 
 
 class DarkCaptureFlowTests(unittest.TestCase):
-    def run_take(self, artifacts, *, before=b"dark\n", after=b"dark\n", test_code=0):
+    def run_take(self, artifacts, *, before=b"dark\n", after=b"dark\n", test_code=0,
+                 recorder_exit=0, exit_during_provenance=None, recorder_timeout=False):
         self.selection = "DraftPocketDemoUITests/testQASwapDeleteUndoRestartAndChatIsolation"
         self.trace = []
         self.session = capture.SimulatorSession(artifacts)
@@ -98,7 +99,19 @@ class DarkCaptureFlowTests(unittest.TestCase):
                   "delete_start", "delete_end", "undo_start", "undo_end", "qa_end"]
         recorder = mock.Mock()
         recorder.poll.return_value = None
-        recorder.wait.side_effect = lambda **kwargs: setattr(recorder.poll, "return_value", 0) or 0
+        recorder_waits = []
+        def wait_for_stop(*, timeout):
+            recorder_waits.append(timeout)
+            if recorder_timeout and len(recorder_waits) == 1:
+                raise subprocess.TimeoutExpired("recorder", timeout)
+            recorder.poll.return_value = recorder_exit
+            return recorder_exit
+        recorder.wait.side_effect = wait_for_stop
+        self.recorder = recorder
+        def verify_provenance(*args):
+            if exit_during_provenance is not None:
+                recorder.poll.return_value = exit_during_provenance
+            return {"matched": True}
         def spawn(command, **kwargs):
             if "--buildOnly" in command:
                 self.trace.append("build")
@@ -122,7 +135,7 @@ class DarkCaptureFlowTests(unittest.TestCase):
             patch(capture.package, "make_command", return_value=["make", "test"])
             patch(capture.package, "run", return_value=b"/owned/Telegram.app\n")
             patch(capture, "built_binary_inventory", return_value={"files": []})
-            self.provenance = patch(capture, "verify_installed_binaries", return_value={"matched": True})
+            self.provenance = patch(capture, "verify_installed_binaries", side_effect=verify_provenance)
             self.native = patch(capture, "native_results", return_value=[{"identifier": self.selection + "()", "status": "Success"}])
             self.media = patch(capture, "inspect_media")
             patch(capture, "SimulatorSession", return_value=self.session)
@@ -181,6 +194,50 @@ class DarkCaptureFlowTests(unittest.TestCase):
             self.assertEqual(identity["xctest_exit_code"], 7)
             self.assertNotIn("reported_test_cases", identity)
             self.native.assert_not_called()
+            self.session.cleanup.assert_called_once()
+
+    def test_recorder_exit_after_xctest_before_intentional_stop_cannot_pass(self):
+        for code in (0, 7):
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as temporary:
+                artifacts = Path(temporary)
+                with self.assertRaisesRegex(capture.package.PackageError, f"Recorder exited {code} before intentional stop"):
+                    self.run_take(artifacts, exit_during_provenance=code)
+                identity = json.loads((artifacts / "capture-identity.json").read_text())
+                self.assertFalse(identity["recorder_alive_before_stop"])
+                self.assertEqual(identity["recorder_exit_code"], code)
+                self.assertNotIn("recorder_stop_requested_utc", identity)
+                self.assertEqual(identity["reported_test_cases"], 1)  # A passed UI case cannot override a failed take.
+                self.assertEqual((artifacts / "draft-pocket-continuous-raw.mov").read_bytes(), b"test-video-placeholder")
+                self.media.assert_called_once()
+                self.session.cleanup.assert_called_once()
+
+    def test_nonzero_recorder_finalization_is_not_accepted_as_a_normal_sigint_stop(self):
+        for code in (7, -capture.signal.SIGINT):
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as temporary:
+                artifacts = Path(temporary)
+                with self.assertRaisesRegex(capture.package.PackageError, f"Recorder finalization exited {code}"):
+                    self.run_take(artifacts, recorder_exit=code)
+                identity = json.loads((artifacts / "capture-identity.json").read_text())
+                self.assertTrue(identity["recorder_alive_before_stop"])
+                self.assertIn("recorder_stop_requested_utc", identity)
+                self.assertEqual(identity["recorder_exit_code"], code)
+                self.assertTrue(identity["secondary_errors"])
+                self.assertEqual((artifacts / "draft-pocket-continuous-raw.mov").read_bytes(), b"test-video-placeholder")
+                self.media.assert_called_once()
+                self.session.cleanup.assert_called_once()
+
+    def test_recorder_finalization_timeout_remains_failed_with_bounded_forced_cleanup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            artifacts = Path(temporary)
+            with self.assertRaisesRegex(capture.package.PackageError, "Recorder did not finalize after SIGINT"):
+                self.run_take(artifacts, recorder_exit=-9, recorder_timeout=True)
+            self.assertEqual(self.recorder.wait.call_args_list, [mock.call(timeout=30), mock.call(timeout=5)])
+            self.recorder.kill.assert_called_once()
+            identity = json.loads((artifacts / "capture-identity.json").read_text())
+            self.assertTrue(identity["recorder_forced_termination"])
+            self.assertEqual(identity["recorder_exit_code"], -9)
+            self.assertEqual((artifacts / "draft-pocket-continuous-raw.mov").read_bytes(), b"test-video-placeholder")
+            self.media.assert_called_once()
             self.session.cleanup.assert_called_once()
 
 

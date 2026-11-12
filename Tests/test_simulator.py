@@ -1,6 +1,7 @@
 """Owned device lifecycle, startup evidence, and framebuffer prerequisites."""
 
 import json
+import copy
 import hashlib
 import os
 from pathlib import Path
@@ -13,7 +14,82 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 import package
-from simulator import SimulatorSession
+from simulator import SimulatorSession, select_simulator
+
+
+class SimulatorInventoryTests(unittest.TestCase):
+    def setUp(self):
+        self.runtime = {"name": "iOS 27.0", "version": "27.0", "isAvailable": True,
+                        "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-27-0"}
+        self.device = {"name": "iPhone 17", "identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-17"}
+        self.runtimes = {"runtimes": [self.runtime]}
+        self.devices = {"devicetypes": [self.device]}
+
+    def select(self):
+        return select_simulator(self.runtimes, self.devices, "iPhone 17", "27.0")
+
+    def test_exact_available_selection_is_pure_and_preserves_older_minimal_inventory(self):
+        original = copy.deepcopy((self.runtimes, self.devices))
+        with mock.patch("simulator.subprocess.run") as execute:
+            runtime, device = self.select()
+        self.assertIs(runtime, self.runtime)
+        self.assertIs(device, self.device)
+        self.assertEqual((self.runtimes, self.devices), original)
+        execute.assert_not_called()
+
+    def test_only_another_available_ios_version_is_not_a_substitute(self):
+        for change in ({"version": "27.2"}, {"isAvailable": False}, {"isAvailable": "true"},
+                       {"name": "visionOS 27.0"}):
+            with self.subTest(change=change):
+                self.runtimes = {"runtimes": [{**self.runtime, **change}]}
+                with self.assertRaisesRegex(package.PackageError, "unavailable or ambiguous"):
+                    self.select()
+
+    def test_missing_or_ambiguous_device_or_runtime_fails(self):
+        cases = (([], [self.device]), ([self.runtime, dict(self.runtime)], [self.device]),
+                 ([self.runtime], []), ([self.runtime], [self.device, dict(self.device)]),
+                 ([self.runtime], [{**self.device, "name": "iPhone 18 Pro"}]))
+        for runtimes, devices in cases:
+            with self.subTest(runtimes=runtimes, devices=devices):
+                self.runtimes, self.devices = {"runtimes": runtimes}, {"devicetypes": devices}
+                with self.assertRaisesRegex(package.PackageError, "unavailable or ambiguous"):
+                    self.select()
+
+    def test_runtime_supported_device_identifier_must_match_exactly_once(self):
+        self.runtime["supportedDeviceTypes"] = [dict(self.device)]
+        self.assertEqual(self.select(), (self.runtime, self.device))
+        for supported in ([], [{**self.device, "identifier": "other-device"}],
+                          [dict(self.device), dict(self.device)]):
+            with self.subTest(supported=supported):
+                self.runtime["supportedDeviceTypes"] = supported
+                with self.assertRaisesRegex(package.PackageError, "unsupported or ambiguous"):
+                    self.select()
+
+    def test_invalid_inventory_or_selected_identifier_is_not_an_availability_success(self):
+        for payload in (None, [], {}, {"runtimes": None}, {"runtimes": [None]}):
+            with self.subTest(payload=payload), self.assertRaises(package.PackageError):
+                select_simulator(payload, self.devices, "iPhone 17", "27.0")
+        for payload in (None, [], {}, {"devicetypes": "wrong"}, {"devicetypes": [17]}):
+            with self.subTest(payload=payload), self.assertRaises(package.PackageError):
+                select_simulator(self.runtimes, payload, "iPhone 17", "27.0")
+        for target in (self.runtime, self.device):
+            original = target["identifier"]
+            for invalid in (None, "", 27):
+                target["identifier"] = invalid
+                with self.subTest(invalid=invalid), self.assertRaisesRegex(package.PackageError, "invalid identifier"):
+                    self.select()
+            target["identifier"] = original
+
+    def test_invalid_supported_metadata_fails_instead_of_ignoring_it(self):
+        for invalid in (None, {}, [None], [{}], [{"identifier": ""}]):
+            self.runtime["supportedDeviceTypes"] = invalid
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(package.PackageError, "invalid supported-device"):
+                self.select()
+
+    def test_invalid_requested_device_or_version_fails(self):
+        for device, version in ((None, "27.0"), ("", "27.0"), ("iPhone 17", 27), ("iPhone 17", "latest")):
+            with self.subTest(device=device, version=version), self.assertRaisesRegex(package.PackageError, "Invalid exact"):
+                select_simulator(self.runtimes, self.devices, device, version)
 
 
 class SimulatorSessionTests(unittest.TestCase):
@@ -101,6 +177,19 @@ class SimulatorSessionTests(unittest.TestCase):
     def test_unavailable_exact_runtime_never_creates_a_substitute(self):
         self.session.os_version = "27.2"
         with self.assertRaisesRegex(package.PackageError, "exact Simulator"):
+            self.session.create()
+        self.assertFalse(any(command[:3] == ["xcrun", "simctl", "create"] for command in self.commands))
+
+    def test_create_reuses_compatibility_selector_before_any_device_mutation(self):
+        def command(args, **kwargs):
+            result = self.command(args, **kwargs)
+            if args[:4] == ["xcrun", "simctl", "list", "runtimes"]:
+                payload = json.loads(result.stdout)
+                payload["runtimes"][0]["supportedDeviceTypes"] = []
+                result.stdout = json.dumps(payload).encode()
+            return result
+        self.run.side_effect = command
+        with self.assertRaisesRegex(package.PackageError, "unsupported or ambiguous"):
             self.session.create()
         self.assertFalse(any(command[:3] == ["xcrun", "simctl", "create"] for command in self.commands))
 

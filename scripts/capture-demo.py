@@ -775,22 +775,34 @@ def capture(checkout, configuration, cache, artifacts, test_filter, *, appearanc
             identity["failure_health_error"] = str(health_error)
     finally:
         try:
-            if recorder and recorder.poll() is None:
+            if recorder:
+                code = recorder.poll()
+                identity["recorder_alive_before_stop"] = code is None
+                identity["recorder_exit_code"] = code
+                if code is not None:
+                    raise package.PackageError(f"Recorder exited {code} before intentional stop; take is incomplete")
+                identity["recorder_stop_requested_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
                 recorder.send_signal(signal.SIGINT)
                 try:
-                    recorder.wait(timeout=30)
+                    code = recorder.wait(timeout=30)
                 except subprocess.TimeoutExpired:
+                    identity["recorder_forced_termination"] = True
                     recorder.kill()
-                    recorder.wait(timeout=5)
-                    error = error or package.PackageError("Recorder did not finalize after SIGINT")
-            if recorder:
-                identity["recorder_exit_code"] = recorder.poll()
-            if recorder_log:
-                recorder_log.close()
-        except (OSError, subprocess.TimeoutExpired) as recorder_error:
+                    identity["recorder_exit_code"] = recorder.wait(timeout=5)
+                    raise package.PackageError("Recorder did not finalize after SIGINT") from None
+                identity["recorder_exit_code"] = code
+                if code != 0:
+                    raise package.PackageError(f"Recorder finalization exited {code}; expected normal exit 0")
+        except (package.PackageError, OSError, subprocess.TimeoutExpired) as recorder_error:
             identity["recorder_stop_error"] = str(recorder_error)
             secondary_errors.append("recorder stop: " + str(recorder_error))
             error = error or package.PackageError("Recorder termination failed; raw evidence retained")
+        try:
+            if recorder_log:
+                recorder_log.close()
+        except OSError as recorder_log_error:
+            secondary_errors.append("recorder log close: " + str(recorder_log_error))
+            error = error or package.PackageError("Recorder log could not be closed; raw evidence retained")
         identity["finished_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
         try:
             identity_path.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")

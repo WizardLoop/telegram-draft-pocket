@@ -49,7 +49,7 @@ class PackageError(Exception):
     pass
 
 
-def run(args, cwd=None, capture=True):
+def run(args, cwd=None, capture=True, timeout=None):
     environment = None
     if Path(str(args[0])).stem.lower() == "git":
         environment = os.environ.copy()
@@ -58,10 +58,13 @@ def run(args, cwd=None, capture=True):
         for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
                     "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"):
             environment.pop(key, None)
-    result = subprocess.run([str(arg) for arg in args], cwd=cwd, check=False,
-                            env=environment,
-                            stdout=subprocess.PIPE if capture else None,
-                            stderr=subprocess.PIPE if capture else None)
+    try:
+        result = subprocess.run([str(arg) for arg in args], cwd=cwd, check=False,
+                                env=environment, timeout=timeout,
+                                stdout=subprocess.PIPE if capture else None,
+                                stderr=subprocess.PIPE if capture else None)
+    except subprocess.TimeoutExpired:
+        raise PackageError(f"{args[0]} exceeded {timeout}s") from None
     if result.returncode:
         error = result.stderr.decode("utf-8", errors="replace").strip() if capture else ""
         raise PackageError(f"{args[0]} exited {result.returncode}: {error}")

@@ -204,9 +204,11 @@ class SimulatorFlowTests(unittest.TestCase):
         config = json.loads((ROOT / "Integration/build-configuration.example.json").read_text())
         config.update(api_id="123456", api_hash="a" * 32)
         secret_json = json.dumps(config)
-        base = {"commit": "b" * 40, "versions": {"macos": "27", "xcode": "27.1"}}
+        base = {"commit": "b" * 40, "versions": {"macos": "27", "xcode": "27.1"},
+                "native_test_simulator": {"device_type": "iPhone 17", "os_version": "27.0"}}
         manifest = {"feature": {"patch": {"sha256": "c" * 64}},
-                    "demo": {"available": with_demo, "patch": {"sha256": "d" * 64}}}
+                    "demo": {"available": with_demo, "patch": {"sha256": "d" * 64},
+                             "device_type": "iPhone 17", "os_version": "27.0"}}
         visited = []
         self.guard_instances = {}
 
@@ -251,7 +253,16 @@ class SimulatorFlowTests(unittest.TestCase):
             if command[0] == "xcodebuild":
                 return b"Xcode 27.1\nBuild version synthetic\n"
             if command[:4] == ["xcrun", "simctl", "list", "runtimes"]:
-                return json.dumps({"runtimes": [{"name": "iOS 27.0", "identifier": "synthetic-runtime", "isAvailable": True}]}).encode()
+                self.assertEqual(kwargs.get("timeout"), 30)
+                if results.get("inventory-timeout"):
+                    raise ci.package.PackageError("xcrun exceeded 30s")
+                return json.dumps(results.get("runtime_info", {"runtimes": [{"name": "iOS 27.0", "version": "27.0",
+                    "identifier": "synthetic-runtime", "isAvailable": True,
+                    "supportedDeviceTypes": [{"identifier": "synthetic-device"}]}]})).encode()
+            if command[:4] == ["xcrun", "simctl", "list", "devicetypes"]:
+                self.assertEqual(kwargs.get("timeout"), 30)
+                return json.dumps(results.get("device_info", {"devicetypes": [
+                    {"name": "iPhone 17", "identifier": "synthetic-device"}]})).encode()
             if command[0] in ("ffmpeg", "ffprobe"):
                 return b"synthetic media tool version\n"
             raise AssertionError(f"Unexpected external command: {command}")
@@ -348,6 +359,33 @@ class SimulatorFlowTests(unittest.TestCase):
         self.assertNotIn("failures", status)
         self.assertFalse((artifacts / "failure.txt").exists())
         self.assertEqual(visited, ["portable-tests", "bootstrap", "check", "build", "capture", "native-tests", "native-case-review"])
+        preflight = json.loads((artifacts / "simulator-preflight.json").read_text())
+        self.assertEqual(preflight["status"], "passed")
+        self.assertEqual([entry["lane"] for entry in preflight["selections"]], ["native", "capture"])
+        self.assertTrue(all(entry["os_version"] == "27.0" and entry["device_type"] == "iPhone 17"
+                            for entry in preflight["selections"]))
+
+    def test_exact_simulator_failure_stops_before_configuration_and_expensive_work(self):
+        variants = [
+            {"runtime_info": {"runtimes": [{"name": "iOS 27.1", "version": "27.1", "isAvailable": True,
+                                            "identifier": "other-runtime"}]}},
+            {"device_info": {"devicetypes": []}},
+            {"runtime_info": {"runtimes": [{"name": "iOS 27.0", "version": "27.0", "isAvailable": True,
+                "identifier": "synthetic-runtime", "supportedDeviceTypes": [{"identifier": "other-device"}]}]}},
+            {"inventory-timeout": True},
+        ]
+        for results in variants:
+            with self.subTest(results=results):
+                code, status, artifacts, visited = self.attempt(results)
+                self.assertEqual(code, 1)
+                self.assertEqual(visited, ["portable-tests"])
+                self.assertEqual(status["stages"]["toolchain"], "failed")
+                for name in ("configuration", "reconstruction", "build", "capture", "native_tests"):
+                    self.assertEqual(status["stages"][name], "not_run")
+                self.assertIn("Exact Simulator preflight failed", status["failure"])
+                evidence = json.loads((artifacts / "simulator-preflight.json").read_text())
+                self.assertEqual(evidence["status"], "failed")
+                self.assertTrue(evidence["error"])
 
     def test_native_exit_success_cannot_override_incomplete_case_evidence(self):
         code, status, artifacts, visited = self.attempt({"native-case-review": 1})
@@ -407,6 +445,12 @@ class SimulatorFlowTests(unittest.TestCase):
         self.assertEqual(set(status["failures"]), {"native_tests", "capture"})
         self.assertNotIn("capture", visited)
         self.assertIn("no isolated full-client", status["failures"]["capture"])
+
+
+class CommandTimeoutTests(unittest.TestCase):
+    def test_bounded_public_probe_timeout_is_a_package_failure(self):
+        with self.assertRaisesRegex(ci.package.PackageError, "exceeded 0.1s"):
+            ci.package.run([sys.executable, "-c", "import time; time.sleep(10)"], timeout=0.1)
 
 
 if __name__ == "__main__":
