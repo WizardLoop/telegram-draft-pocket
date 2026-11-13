@@ -1576,10 +1576,10 @@ index b98bcaec134ba38bbd539e2f029c61aa8d00463e..fc133c122c7e4c62583ebe6888ee9205
 +    visibility = ["//visibility:public"],
 +)
 diff --git a/submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer/Sources/RichTextEditorChatInputNode.swift b/submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer/Sources/RichTextEditorChatInputNode.swift
-index 7d7964402584c428a8638a7b87c10b7b8509855e..e5ea3a3520946a8e471a3c7e61d27108a3ad9e85 100644
+index 7d7964402584c428a8638a7b87c10b7b8509855e..bb220103727251d5f0a40d55ebae9f3f0324144c 100644
 --- a/submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer/Sources/RichTextEditorChatInputNode.swift
 +++ b/submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer/Sources/RichTextEditorChatInputNode.swift
-@@ -523,18 +523,65 @@ public final class RichTextEditorChatInputNode: ASDisplayNode, ChatRichTextInput
+@@ -523,18 +523,69 @@ public final class RichTextEditorChatInputNode: ASDisplayNode, ChatRichTextInput
      /// (`chatInputContent(fromDocument:)`), bypassing the lossy `Document → NSAttributedString` hop the default
      /// protocol implementation (and the legacy `attributedText` getter) take. The resolvers map the editor's
      /// opaque host keys to concrete chat-layer values: an unresolvable emoji degrades to plain text and an
@@ -1624,6 +1624,10 @@ index 7d7964402584c428a8638a7b87c10b7b8509855e..e5ea3a3520946a8e471a3c7e61d27108
 +                  let end = PositionResolver.globalPosition(of: native.end.ref, offset: native.end.offset, in: tree) else { return false }
 +            if #available(iOS 18.4, *), self.editorView is RichTextEngineEditorView {
 +                guard start <= end else { return false }
++                if start == end, let startAffinity = native.start.affinity, let endAffinity = native.end.affinity,
++                   startAffinity != endAffinity {
++                    return false
++                }
 +            } else if native.start.affinity == .upstream || native.end.affinity == .upstream {
 +                return false
 +            }
@@ -1649,7 +1653,7 @@ index 7d7964402584c428a8638a7b87c10b7b8509855e..e5ea3a3520946a8e471a3c7e61d27108
      /// Replace the editor's content from a `ChatInputContent`. This is the chat layer's structural SET path
      /// (draft restore, send-clear, spoiler re-decorate): it MUST land the structural blocks back into the editor
      /// `Document`, so we convert STRAIGHT via the direct bridge (`document(fromChatInputContent:)`) rather than
-@@ -544,7 +591,7 @@ public final class RichTextEditorChatInputNode: ASDisplayNode, ChatRichTextInput
+@@ -544,7 +595,7 @@ public final class RichTextEditorChatInputNode: ASDisplayNode, ChatRichTextInput
      /// can resolve it back. Sets the editor's live document directly (NOT via `attributedText`, which would
      /// flatten structure beyond the `ChatTextInputAttributes` vocabulary, e.g. tables) and runs the same refresh
      /// `onChange` performs (so the panel re-lays-out and re-reads content), preserving the refresh/`didUpdateText`
@@ -1658,7 +1662,7 @@ index 7d7964402584c428a8638a7b87c10b7b8509855e..e5ea3a3520946a8e471a3c7e61d27108
      /// **Whose caret is it?** While the editor has focus, the editor's — and a content-equal
      /// `setInputContent` may not move it.
      ///
-@@ -643,10 +690,9 @@ public final class RichTextEditorChatInputNode: ASDisplayNode, ChatRichTextInput
+@@ -643,10 +694,9 @@ public final class RichTextEditorChatInputNode: ASDisplayNode, ChatRichTextInput
          // only move the caret if the requested selection actually differs from the live one — so the common
          // no-op echo (the editor's own edit pushed up and applied back) leaves scroll AND selection
          // untouched, while a deliberate programmatic caret move still takes effect.
@@ -1671,7 +1675,7 @@ index 7d7964402584c428a8638a7b87c10b7b8509855e..e5ea3a3520946a8e471a3c7e61d27108
              // STALE-SELECTION GUARD (the double-tap "flash then deselect" fix).
              //
              // The editor reports a selection change to the host ASYNCHRONOUSLY (coalesced to the next runloop
-@@ -662,10 +708,12 @@ public final class RichTextEditorChatInputNode: ASDisplayNode, ChatRichTextInput
+@@ -662,10 +712,12 @@ public final class RichTextEditorChatInputNode: ASDisplayNode, ChatRichTextInput
              // echo — a real edit changes content (→ the rebuild branch below), and a deliberate caret move goes
              // through the editor first (so `liveRange` is already that caret). Skip it and keep the live range;
              // every other move (including the unfocused/programmatic caret set) still applies.
@@ -1688,7 +1692,7 @@ index 7d7964402584c428a8638a7b87c10b7b8509855e..e5ea3a3520946a8e471a3c7e61d27108
              }
              return
          }
-@@ -702,7 +750,7 @@ public final class RichTextEditorChatInputNode: ASDisplayNode, ChatRichTextInput
+@@ -702,7 +754,7 @@ public final class RichTextEditorChatInputNode: ASDisplayNode, ChatRichTextInput
              _ = self.editorView.update(size: self.editorView.bounds.size, insets: self.trackedInsets, contentMargins: self.trackedContentMargins, scrollIndicatorInsets: self.trackedScrollIndicatorInsets)
          }
          self.storedDelegate?.chatInputTextNodeDidUpdateText()
@@ -1936,6 +1940,34 @@ index 1f8b01ee472b353933b8a478fd96333fbbaa647d..354d8eb687c838597b12643dc4b648e2
      func composerCaretRect() -> CGRect?
      var isEditorFirstResponder: Bool { get }
      func resignEditorFirstResponder() -> Bool
+diff --git a/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextInputDecUpstream/TextView/IDBlockTextView+TextInput.m b/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextInputDecUpstream/TextView/IDBlockTextView+TextInput.m
+index 71ffd694b49445744ec4c9c996d64b7bf76f1cd8..a3b40ba9caceb5312c2a550b122fcb0c49cac2db 100644
+--- a/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextInputDecUpstream/TextView/IDBlockTextView+TextInput.m
++++ b/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextInputDecUpstream/TextView/IDBlockTextView+TextInput.m
+@@ -527,6 +527,10 @@
+     return self.id_behaviorInput.selectionAffinity;
+ }
+ 
++- (void)setSelectionAffinity:(UITextStorageDirection)selectionAffinity {
++    self.id_behaviorInput.selectionAffinity = selectionAffinity;
++}
++
+ - (BOOL)canPerformAction:(SEL)action withSender:(id)sender {
+     UITextRange *selection = self.selectedTextRange;
+     BOOL hasSelection = selection != nil && !selection.empty;
+diff --git a/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextInputDecUpstream/include/IDBlockTextView.h b/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextInputDecUpstream/include/IDBlockTextView.h
+index 1da725bea45706056ec0e6844b32223bc0710689..ba6dffaf664b61fab9b72143e836a1a0c45a9a33 100644
+--- a/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextInputDecUpstream/include/IDBlockTextView.h
++++ b/submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextInputDecUpstream/include/IDBlockTextView.h
+@@ -261,6 +261,8 @@ API_AVAILABLE(ios(18.4))
+ 
+ API_AVAILABLE(ios(18.4))
+ @interface IDBlockTextView (TextInputConformance) <UITextInput>
++/// The controller keeps caret affinity separately from an assigned text range.
++@property(nonatomic) UITextStorageDirection selectionAffinity;
+ @end
+ 
+ NS_ASSUME_NONNULL_END
 diff --git a/submodules/TelegramUI/Sources/ChatController.swift b/submodules/TelegramUI/Sources/ChatController.swift
 index 5fe58bbf51f3e27c0c06f453b59938c97fc6faa7..fbe0a334562c01df475d5ff12edb79064d80409f 100644
 --- a/submodules/TelegramUI/Sources/ChatController.swift

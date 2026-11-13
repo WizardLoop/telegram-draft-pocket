@@ -77,7 +77,8 @@ class CaptureSelectionTests(unittest.TestCase):
 
 class DarkCaptureFlowTests(unittest.TestCase):
     def run_take(self, artifacts, *, before=b"dark\n", after=b"dark\n", test_code=0,
-                 recorder_exit=0, exit_during_provenance=None, recorder_timeout=False):
+                 recorder_exit=0, exit_during_provenance=None, recorder_timeout=False,
+                 native_error=None, launch_error=None, crash_error=None):
         self.selection = "DraftPocketDemoUITests/testQASwapDeleteUndoRestartAndChatIsolation"
         self.trace = []
         self.session = capture.SimulatorSession(artifacts)
@@ -112,6 +113,16 @@ class DarkCaptureFlowTests(unittest.TestCase):
             if exit_during_provenance is not None:
                 recorder.poll.return_value = exit_during_provenance
             return {"matched": True}
+        def launch_report(*args):
+            self.trace.append("launch-report")
+            if launch_error:
+                raise launch_error
+            return {"status": "saved"}
+        def crash_summary(*args):
+            self.trace.append("crash-summary")
+            if crash_error:
+                raise crash_error
+            return {"status": "absent", "reason": "no_matching_crash_report"}
         def spawn(command, **kwargs):
             if "--buildOnly" in command:
                 self.trace.append("build")
@@ -136,7 +147,10 @@ class DarkCaptureFlowTests(unittest.TestCase):
             patch(capture.package, "run", return_value=b"/owned/Telegram.app\n")
             patch(capture, "built_binary_inventory", return_value={"files": []})
             self.provenance = patch(capture, "verify_installed_binaries", side_effect=verify_provenance)
-            self.native = patch(capture, "native_results", return_value=[{"identifier": self.selection + "()", "status": "Success"}])
+            self.native = patch(capture, "native_results", side_effect=native_error,
+                                return_value=[{"identifier": self.selection + "()", "status": "Success"}])
+            self.launch_report = patch(capture, "export_launch_report", side_effect=launch_report)
+            self.crash_summary = patch(capture, "export_crash_summaries", side_effect=crash_summary)
             self.media = patch(capture, "inspect_media")
             patch(capture, "SimulatorSession", return_value=self.session)
             patch(capture.subprocess, "Popen", side_effect=spawn)
@@ -153,6 +167,7 @@ class DarkCaptureFlowTests(unittest.TestCase):
             self.assertEqual([check["phase"] for check in identity["appearance"]["checks"]], ["before-test", "after-test"])
             self.assertTrue(all(check["matched"] and check["udid"] == identity["udid"] for check in identity["appearance"]["checks"]))
             self.assertEqual(identity["reported_test_cases"], 1)
+            self.crash_summary.assert_not_called()
             self.assertLess(self.trace.index("boot"), self.trace.index("appearance-set"))
             self.assertLess(self.trace.index("appearance-before-test"), self.trace.index("recorder"))
             self.assertLess(self.trace.index("recorder"), self.trace.index("xctest"))
@@ -193,8 +208,36 @@ class DarkCaptureFlowTests(unittest.TestCase):
             identity = json.loads((artifacts / "capture-identity.json").read_text())
             self.assertEqual(identity["xctest_exit_code"], 7)
             self.assertNotIn("reported_test_cases", identity)
-            self.native.assert_not_called()
+            self.native.assert_called_once_with(artifacts / "bazel-testlogs/Tests/DraftPocketDemo/DraftPocketDemoUITests",
+                                                artifacts, mock.ANY, self.selection, diagnostic=True)
+            self.launch_report.assert_called_once()
+            self.assertEqual(identity["launch_diagnostics"]["status"], "saved")
+            self.assertEqual(identity["crash_diagnostics"]["status"], "absent")
+            self.crash_summary.assert_called_once()
+            self.assertLess(self.trace.index("crash-summary"), self.trace.index("cleanup"))
+            self.assertLess(self.trace.index("launch-report"), self.trace.index("cleanup"))
             self.session.cleanup.assert_called_once()
+
+    def test_diagnostic_export_failure_preserves_xctest_failure_and_cleanup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            artifacts = Path(temporary)
+            with self.assertRaisesRegex(capture.package.PackageError, "XCTest failed with exit 7"):
+                self.run_take(artifacts, test_code=7,
+                              native_error=capture.package.PackageError("unreadable native result"),
+                              launch_error=capture.package.PackageError("unvalidated private response"),
+                              crash_error=OSError("unvalidated private report"))
+            content = (artifacts / "capture-identity.json").read_text()
+            identity = json.loads(content)
+            self.assertEqual(identity["xctest_exit_code"], 7)
+            self.assertEqual(identity["launch_diagnostics"]["status"], "unavailable")
+            self.assertEqual(identity["crash_diagnostics"]["status"], "unavailable")
+            self.assertIn("unreadable native result", identity["native_failure_evidence_error"])
+            self.assertNotIn("unvalidated private response", content)
+            self.assertNotIn("unvalidated private report", content)
+            self.assertNotIn("reported_test_cases", identity)
+            self.assertLess(self.trace.index("launch-report"), self.trace.index("cleanup"))
+            self.session.cleanup.assert_called_once()
+            self.media.assert_called_once()
 
     def test_recorder_exit_after_xctest_before_intentional_stop_cannot_pass(self):
         for code in (0, 7):
@@ -380,6 +423,24 @@ class NativeResultTests(unittest.TestCase):
                          [{"identifier": "DraftPocketDemoUITests/testCaptureProductionStory()", "status": "Success"}])
         self.assertEqual(seen, ["0~native-reference"])
 
+    def test_typed_empty_sibling_does_not_hide_the_real_case(self):
+        groups = self.summary["summaries"]["_values"][0]["testableSummaries"]["_values"][0]["tests"]["_values"]
+        groups.insert(0, {"identifier": {"_value": "EmptySuite"}, "subtests": {"_type": {"_name": "Array"}}})
+        cases = capture.xcresult_cases(self.root, lambda _: self.summary)
+        self.assertEqual(capture.selected_native_case(cases, "DraftPocketDemoUITests/testCaptureProductionStory")["status"], "Success")
+        groups.pop()
+        with self.assertRaises(capture.package.PackageError):
+            capture.selected_native_case(capture.xcresult_cases(self.root, lambda _: self.summary),
+                                         "DraftPocketDemoUITests/testCaptureProductionStory")
+
+    def test_array_reader_distinguishes_typed_empty_from_malformed_or_missing(self):
+        self.assertEqual(capture.native_array({"items": {"_type": {"_name": "Array"}}}, "items"), [])
+        self.assertEqual(capture.native_array({}, "items", optional=True), [])
+        for container in ({}, {"items": {}}, {"items": None}, {"items": {"_type": {"_name": "String"}}},
+                          {"items": {"_type": {"_name": "Array"}, "_values": None}}, {"items": {"_values": "bad"}}):
+            with self.subTest(container=container), self.assertRaises(capture.package.PackageError):
+                capture.native_array(container, "items")
+
     def test_missing_wrong_or_ambiguous_native_schema_rejected(self):
         for root in ({}, {"actions": None}, {"actions": {"_values": [None]}},
                      {"actions": {"_values": self.root["actions"]["_values"] * 2}}):
@@ -469,6 +530,15 @@ class NamedScreenshotTests(unittest.TestCase):
         self.assertEqual(len(set(item["path"] for item in selected)), 4)
         self.assertTrue(all("/" not in item["path"] and ".." not in item["path"] for item in selected))
         self.assertNotIn("0~must-not-export", [item["payload_ref"] for item in selected])
+
+    def test_typed_empty_activities_do_not_mask_named_screenshots(self):
+        self.summary["activitySummaries"]["_values"].insert(0, {
+            "attachments": {"_type": {"_name": "Array"}},
+            "subactivities": {"_type": {"_name": "Array"}}})
+        self.assertEqual(len(capture.named_screenshots(self.summary, self.selection)), 4)
+        self.summary["activitySummaries"]["_values"][0]["attachments"]["_values"] = None
+        with self.assertRaises(capture.package.PackageError):
+            capture.named_screenshots(self.summary, self.selection)
 
     def test_wrong_case_missing_or_duplicate_named_images_rejected(self):
         variants = []
@@ -748,6 +818,113 @@ class BinaryProvenanceTests(unittest.TestCase):
                 archive.writestr(entry, b"outside")
             with self.assertRaises(capture.package.PackageError):
                 capture.built_binary_inventory(root, self.bundle_id, self.target)
+
+
+class DiagnosticNativeResultTests(unittest.TestCase):
+    def setUp(self):
+        self.selection = "DraftPocketDemoUITests/testCaptureProductionStory"
+        self.root = {"actions": {"_values": [{"_type": {"_name": "ActionRecord"},
+                     "actionResult": {"testsRef": {"id": {"_value": "0~tests"}}}}]}}
+        self.leaf = {"identifier": {"_value": "testCaptureProductionStory()"},
+                     "testStatus": {"_value": "Failure"}, "summaryRef": {"id": {"_value": "0~summary"}}}
+        self.group = {"identifier": {"_value": "DraftPocketDemoUITests"}, "subtests": {"_values": [self.leaf]}}
+        self.tests = {"summaries": {"_values": [{"testableSummaries": {"_values": [{
+            "tests": {"_values": [self.group]}}]}}]}}
+        self.content = b"\x89PNG\r\n\x1a\nmock native failure screenshot"
+        self.attachment = {"name": {"_value": "demo-entrypoint-failure"},
+                           "uniformTypeIdentifier": {"_value": "public.png"},
+                           "payloadRef": {"id": {"_value": "0~image"}},
+                           "payloadSize": {"_value": str(len(self.content))}}
+        self.summary = {"identifier": {"_value": "testCaptureProductionStory()"},
+                        "testStatus": {"_value": "Failure"}, "private activity text": "MUST-STAY-PRIVATE",
+                        "activitySummaries": {"_values": [{"attachments": {"_type": {"_name": "Array"}}},
+                                                          {"attachments": {"_values": [self.attachment]}}]}}
+        self.exported = []
+
+    def tool(self, command):
+        if command[:3] == ["xcrun", "xcresulttool", "get"]:
+            identifier = command[command.index("--id") + 1] if "--id" in command else None
+            return json.dumps({None: self.root, "0~tests": self.tests, "0~summary": self.summary}[identifier]).encode()
+        if command[0] == "ffprobe":
+            return json.dumps({"streams": [{"codec_type": "video", "codec_name": "png", "nb_read_frames": "1",
+                                            "width": 1206, "height": 2622}]}).encode()
+        self.assertEqual(command[:7], ["xcrun", "xcresulttool", "export", "object", "--legacy", "--type", "file"])
+        self.exported.append(command[command.index("--id") + 1])
+        Path(command[command.index("--output-path") + 1]).write_bytes(self.content)
+        return b""
+
+    def paths(self, temporary):
+        root = Path(temporary)
+        test_directory, artifacts = root / "test", root / "evidence"
+        bundle = test_directory / "test.outputs/test.xcresult"
+        bundle.mkdir(parents=True)
+        (bundle / "Info.plist").write_bytes(b"private native bundle")
+        artifacts.mkdir()
+        return test_directory, artifacts
+
+    def test_failed_case_keeps_exact_failure_image_and_native_status(self):
+        self.summary["activitySummaries"]["_values"].append({"attachments": {"_values": [{
+            "name": {"_value": "unrelated screenshot"}, "payloadRef": {"id": {"_value": "0~never-export"}}
+        }]}})
+        with tempfile.TemporaryDirectory() as temporary:
+            source, artifacts = self.paths(temporary)
+            with mock.patch.object(capture.package, "run", side_effect=self.tool):
+                cases = capture.native_results(source, artifacts, lambda text: text, self.selection, diagnostic=True)
+            self.assertEqual(cases[0]["status"], "Failure")
+            with self.assertRaises(capture.package.PackageError):
+                capture.selected_native_case(cases, self.selection)
+            self.assertEqual(self.exported, ["0~image"])
+            manifest = json.loads((artifacts / "failure-screenshots/manifest.json").read_text(encoding="utf-8"))
+            self.assertTrue(manifest["diagnostic"])
+            self.assertEqual(manifest["native_status"], "Failure")
+            image = artifacts / "failure-screenshots/demo-entrypoint-failure-01.png"
+            self.assertEqual(image.read_bytes(), self.content)
+            self.assertEqual(json.loads((artifacts / "native-xctest-cases.json").read_text())[0]["status"], "Failure")
+            self.assertTrue((artifacts / "native-xcresult-root.json").is_file())
+            self.assertTrue((artifacts / "native-xcresult-tests-00.json").is_file())
+            self.assertFalse((artifacts / "test.xcresult").exists())
+            self.assertFalse((artifacts / "screenshots").exists())
+            for path in artifacts.rglob("*.json"):
+                self.assertNotIn("MUST-STAY-PRIVATE", path.read_text(encoding="utf-8"))
+
+    def test_default_success_requirement_is_unchanged(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source, artifacts = self.paths(temporary)
+            with mock.patch.object(capture.package, "run", side_effect=self.tool), self.assertRaises(capture.package.PackageError):
+                capture.native_results(source, artifacts, lambda text: text, self.selection)
+            self.assertEqual(self.exported, [])
+            self.assertTrue((artifacts / "native-xctest-cases.json").is_file())
+
+    def test_wrong_duplicate_case_or_wrong_image_retains_json_but_exports_nothing(self):
+        variants = ("wrong-case", "duplicate-case", "wrong-image", "duplicate-image", "wrong-summary-status")
+        for variant in variants:
+            self.setUp()
+            if variant == "wrong-case":
+                self.leaf["identifier"]["_value"] = "testOther()"
+            elif variant == "duplicate-case":
+                self.group["subtests"]["_values"].append(copy.deepcopy(self.leaf))
+            elif variant == "wrong-image":
+                self.attachment["name"]["_value"] = "private-diagnostics"
+            elif variant == "duplicate-image":
+                self.summary["activitySummaries"]["_values"][1]["attachments"]["_values"].append(copy.deepcopy(self.attachment))
+            else:
+                self.summary["testStatus"]["_value"] = "Success"
+            with self.subTest(variant=variant), tempfile.TemporaryDirectory() as temporary:
+                source, artifacts = self.paths(temporary)
+                with mock.patch.object(capture.package, "run", side_effect=self.tool), self.assertRaises(capture.package.PackageError):
+                    capture.native_results(source, artifacts, lambda text: text, self.selection, diagnostic=True)
+                self.assertEqual(self.exported, [])
+                self.assertTrue((artifacts / "native-xctest-cases.json").is_file())
+                self.assertFalse((artifacts / "failure-screenshots").exists())
+
+    def test_malformed_result_remains_error_with_root_evidence(self):
+        self.root["actions"]["_values"] = None
+        with tempfile.TemporaryDirectory() as temporary:
+            source, artifacts = self.paths(temporary)
+            with mock.patch.object(capture.package, "run", side_effect=self.tool), self.assertRaises(capture.package.PackageError):
+                capture.native_results(source, artifacts, lambda text: text, self.selection, diagnostic=True)
+            self.assertTrue((artifacts / "native-xcresult-root.json").is_file())
+            self.assertEqual(self.exported, [])
 
 
 if __name__ == "__main__":

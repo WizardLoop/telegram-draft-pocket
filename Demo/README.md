@@ -2,7 +2,7 @@
 
 The user authorized a **fictional `@wizardloop` demo**. This optional overlay opens that isolated fixture in the actual Telegram application: AppDelegate → Account/Postbox → SharedAccountContext/AccountContext → production ChatController. It does not use ComposerHarness, a replacement chat screen, a separate Pocket store, or a real Telegram account.
 
-The full app and XCUITest target compiled in run `41997538945`. The exact test-host artifact was located and hashed. The dedicated Simulator booted and produced a home-screen screenshot, but framebuffer decoding timed out before recording or XCTest could start. Runtime results remain pending. No verified video or motion-frame evaluation is claimed here; see [TESTING](../docs/TESTING.md) for actual run results.
+The full app and XCUITest target compiled in run `43329950073`. Actual Simulator recording and XCTest started, but the app disappeared before its Pocket entrypoint appeared; story failed and QA never ran. The original recording is retained as failure evidence. The candidate fixture now records 21 fixed launch phases with timestamps and takes a named failure screenshot; the capture driver validates and exports only that bounded diagnostic file from its owned device. These changes await native execution. See [TESTING](../docs/TESTING.md) for measured results and [Media](../Media/README.md) for the original take.
 
 ## Isolation and launch
 

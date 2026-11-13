@@ -12,7 +12,7 @@ The integration patch modifies Telegram source. Telegram and its contributors re
 
 ## XCTest runner attachment retention
 
-The optional demo includes a one-field patch to Google's [xctestrunner](https://github.com/google/xctestrunner/blob/4c6f4931aa65b3e6573b3ca11753c98fc8d3071c/xctestrunner/test_runner/xctestrun.py), pinned at `4c6f4931aa65b3e6573b3ca11753c98fc8d3071c` (Bazel version `0.2.16-20260212-4c6f493`). Copyright 2017 Google Inc., Apache License 2.0; the original [license text](docs/licenses/xctestrunner-Apache-2.0.txt) is included. The modification changes only UI tests' custom attachment lifetime from `keepNever` to `keepAlways`; it does not enable automatic screenshots or upgrade the runner. The original source header remains unchanged when applying the patch.
+The optional demo patches Google's [xctestrunner](https://github.com/google/xctestrunner/blob/4c6f4931aa65b3e6573b3ca11753c98fc8d3071c/xctestrunner/test_runner/xctestrun.py), pinned at `4c6f4931aa65b3e6573b3ca11753c98fc8d3071c` (Bazel version `0.2.16-20260212-4c6f493`). Copyright 2017 Google Inc., Apache License 2.0; the original [license text](docs/licenses/xctestrunner-Apache-2.0.txt) is included. The patch retains explicitly attached UI-test screenshots and handles empty attachment collections in result export. It does not enable automatic screenshots, change the original XCTest result or upgrade the runner. Original source headers remain unchanged. Small exact pinned-source [regression fixtures](Tests/fixtures/xctestrunner/README.txt) retain their attribution and license; the complete pinned tree has no NOTICE file.
 
 ## Presentation references
 

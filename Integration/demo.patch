@@ -103,7 +103,41 @@ diff --git a/submodules/TelegramUI/Sources/AppDelegate.swift b/submodules/Telegr
      var nativeWindow: (UIWindow & WindowHost)?
      var mainWindow: Window1!
      private var statusBarHost: ApplicationStatusBarHost?
-@@ -717,16 +719,20 @@
+@@ -351,6 +353,8 @@
+     private var recaptchaClientsBySiteKey: [String: Promise<RecaptchaClient>] = [:]
+         
+     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
++        DraftPocketDemo.recordLaunchPhase(.launchEntered)
++        defer { DraftPocketDemo.recordLaunchPhase(.launchReturned) }
+         precondition(!testIsLaunched)
+         testIsLaunched = true
+         CrashReportCollector.shared.start()
+@@ -451,7 +455,9 @@
+         self.window = window
+         self.nativeWindow = window
+         
++        DraftPocketDemo.recordLaunchPhase(.metalInitializing)
+         hostView.containerView.layer.addSublayer(MetalEngine.shared.rootLayer)
++        DraftPocketDemo.recordLaunchPhase(.metalReady)
+         // On the first start after an update, compile the pipelines that would otherwise stall their first use.
+         if MetalEngine.shared.pipelineCache.isFresh {
+             prewarmLiquidGlassShapes([.crest], qos: .utility)
+@@ -573,9 +579,13 @@
+         try! PasscodeEnvironment.shared.configure(PasscodeConfiguration(appGroupIdentifier: appGroupName, processRole: .mainApp, biometricKeychainService: walletBiometricKeychainService), privateAccessGroup: {
+             BuildConfig.keychainAccessGroup(baseAppBundleId: baseAppBundleId)
+         })
++        DraftPocketDemo.recordLaunchPhase(.passcodeConfigured)
+         let maybeAppGroupUrl = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupName)
+-        
++        DraftPocketDemo.recordLaunchPhase(maybeAppGroupUrl == nil ? .appGroupMissing : .appGroupResolved)
++
++        DraftPocketDemo.recordLaunchPhase(.buildConfigStarted)
+         let buildConfig = BuildConfig(baseAppBundleId: baseAppBundleId)
++        DraftPocketDemo.recordLaunchPhase(.buildConfigReady)
+         self.buildConfig = buildConfig
+         let signatureDict = BuildConfigExtra.signatureDict()
+         
+@@ -717,19 +727,24 @@
          }
          
          let isUITest = CommandLine.arguments.contains("--ui-test")
@@ -125,7 +159,19 @@ diff --git a/submodules/TelegramUI/Sources/AppDelegate.swift b/submodules/Telegr
              performAppGroupUpgrades(appGroupPath: appGroupUrl.path, rootPath: rootPath)
          }
          
-@@ -1063,7 +1069,7 @@
++        DraftPocketDemo.recordLaunchPhase(.isolatedRootSelected)
+         let deviceSpecificEncryptionParameters = BuildConfig.deviceSpecificEncryptionParameters(rootPath, baseAppBundleId: baseAppBundleId)
+         let encryptionParameters = ValueBoxEncryptionParameters(forceEncryptionIfNoSet: false, key: ValueBoxEncryptionParameters.Key(data: deviceSpecificEncryptionParameters.key)!, salt: ValueBoxEncryptionParameters.Salt(data: deviceSpecificEncryptionParameters.salt)!)
+         
+@@ -759,6 +774,7 @@
+             writeAbilityTestSuccess = false
+         }
+         
++        DraftPocketDemo.recordLaunchPhase(writeAbilityTestSuccess ? .writeCheckPassed : .writeCheckFailed)
+         if !writeAbilityTestSuccess {
+             let alertController = UIAlertController(title: nil, message: "The device does not have sufficient free space.", preferredStyle: .alert)
+             alertController.addAction(UIAlertAction(title: "OK", style: .default, handler: { _ in
+@@ -1063,9 +1079,10 @@
          })
          
          let accountManager: AccountManager<TelegramAccountManagerTypes> = setupAccountManager(basePath: rootPath + "/accounts-metadata", isTemporary: false, isReadOnly: false, useCaches: true, removeDatabaseOnError: true, resetLocalSecrets: {
@@ -133,8 +179,11 @@ diff --git a/submodules/TelegramUI/Sources/AppDelegate.swift b/submodules/Telegr
 +            if !DraftPocketDemo.isEnabled { try resetWalletLocalSecrets() }
          })
          self.accountManager = accountManager
++        DraftPocketDemo.recordLaunchPhase(.accountManagerReady)
  
-@@ -1105,12 +1111,12 @@
+         telegramUIDeclareEncodables()
+         initializeAccountManagement()
+@@ -1105,12 +1122,12 @@
              return true
          }
  
@@ -153,7 +202,7 @@ diff --git a/submodules/TelegramUI/Sources/AppDelegate.swift b/submodules/Telegr
  
          self.accountManagerState = extractAccountManagerState(records: accountManager._internalAccountRecordsSync())
          let _ = (accountManager.accountRecords()
-@@ -1133,7 +1139,7 @@
+@@ -1133,7 +1150,7 @@
          |> mapToSignal { [self] accountManager, initialPresentationDataAndSettings -> Signal<(SharedApplicationContext, LoggingSettings), NoError> in
              self.mainWindow?.hostView.containerView.backgroundColor =  initialPresentationDataAndSettings.presentationData.theme.chatList.backgroundColor
              
@@ -162,7 +211,7 @@ diff --git a/submodules/TelegramUI/Sources/AppDelegate.swift b/submodules/Telegr
              
              let presentationDataPromise = Promise<PresentationData>()
              let appLockContext = AppLockContextImpl(rootPath: rootPath, window: self.mainWindow!, rootController: self.window?.rootViewController, applicationBindings: applicationBindings, accountManager: accountManager, presentationDataSignal: presentationDataPromise.get(), lockIconInitialFrame: {
-@@ -1161,7 +1167,7 @@
+@@ -1161,7 +1178,7 @@
                          self.mainWindow.coveringView = nil
                      }
                  }
@@ -171,29 +220,49 @@ diff --git a/submodules/TelegramUI/Sources/AppDelegate.swift b/submodules/Telegr
              navigationBarOverflowMenuPresenter = { [weak sharedContext] sourceView, items in
                  guard let sharedContext, let mainWindow = sharedContext.mainWindow else {
                      return
-@@ -1383,6 +1389,10 @@
+@@ -1270,6 +1287,7 @@
+                 return sharedContext.currentPresentationData.with({ $0 })
+             })
+             let sharedApplicationContext = SharedApplicationContext(sharedContext: sharedContext, notificationManager: notificationManager, wakeupManager: wakeupManager)
++            DraftPocketDemo.recordLaunchPhase(.sharedContextReady)
+             sharedApplicationContext.sharedContext.mediaManager.overlayMediaManager.attachOverlayMediaController(sharedApplicationContext.overlayMediaController)
+             
+             return accountManager.transaction { transaction -> (SharedApplicationContext, LoggingSettings) in
+@@ -1383,6 +1401,11 @@
              }
              |> deliverOnMainQueue
              |> map { accountAndSettings -> UnauthorizedApplicationContext? in
 +                if DraftPocketDemo.isEnabled, let (account, _) = accountAndSettings {
++                    DraftPocketDemo.recordLaunchPhase(.unauthorizedAccountReady)
 +                    self.draftPocketDemoBootstrap.set(DraftPocketDemo.signIn(accountManager: sharedApplicationContext.sharedContext.accountManager, account: account).start())
 +                    return nil
 +                }
                  return accountAndSettings.flatMap { account, otherAccountPhoneNumbers in
                      return UnauthorizedApplicationContext(apiId: buildConfig.apiId, apiHash: buildConfig.apiHash, sharedContext: sharedApplicationContext.sharedContext, account: account, otherAccountPhoneNumbers: otherAccountPhoneNumbers)
                  }
-@@ -1426,6 +1436,10 @@
+@@ -1412,6 +1435,7 @@
+             self.crashReportPromptDisposable.set(nil)
+             self.contextValue = context
+             if let context = context {
++                DraftPocketDemo.recordLaunchPhase(.authorizedContextCreated)
+                 setupLegacyComponents(context: context.context)
+                 let isReady = context.isReady.get()
+                 contextReadyDisposable.set((isReady
+@@ -1425,7 +1449,13 @@
+                     print("Launch to ready took \((CFAbsoluteTimeGetCurrent() - launchStartTime) * 1000.0) ms")
  
                      self.mainWindow.debugAction = nil
++                    DraftPocketDemo.recordLaunchPhase(.authorizedContextReady)
                      self.mainWindow.viewController = context.rootController
 +                    if DraftPocketDemo.isEnabled && !self.draftPocketDemoDidOpen {
 +                        self.draftPocketDemoDidOpen = true
++                        DraftPocketDemo.recordLaunchPhase(.chatRouteRequested)
 +                        self.openChatWhenReady(accountId: context.context.account.id, peerId: DraftPocketDemo.launchPeerId, threadId: nil, activateInput: true, storyId: nil)
 +                    }
                      
                      if firstTime {
                          let layer = context.rootController.view.layer
-@@ -1684,11 +1698,10 @@
+@@ -1684,11 +1714,10 @@
              })
          }
          
@@ -209,7 +278,7 @@ diff --git a/submodules/TelegramUI/Sources/AppDelegate.swift b/submodules/Telegr
          
          var previousReportedMemoryConsumption = 0
          let _ = Foundation.Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true, block: { _ in
-@@ -3135,6 +3148,7 @@
+@@ -3135,6 +3164,7 @@
      }
      
      func requestNotificationTokenInvalidation() {
@@ -217,7 +286,7 @@ diff --git a/submodules/TelegramUI/Sources/AppDelegate.swift b/submodules/Telegr
          UIApplication.shared.unregisterForRemoteNotifications()
          DispatchQueue.main.asyncAfter(deadline: DispatchTime.now() + 1.0, execute: {
              UIApplication.shared.registerForRemoteNotifications()
-@@ -3142,6 +3156,7 @@
+@@ -3142,6 +3172,7 @@
      }
      
      private func registerForNotifications(context: AccountContextImpl, authorize: Bool = true, completion: @escaping (Bool) -> Void = { _ in }) {

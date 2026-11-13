@@ -7,7 +7,7 @@
         "action": "copy",
         "source": "Tests/ComposerHarness/Tests/HarnessDraftPocketSelectionTests.swift",
         "target": "Tests/ComposerHarness/Tests/HarnessDraftPocketSelectionTests.swift",
-        "sha256": "b36dd17df8e9767224c2518da43d723d94b66784d9b0b9a92eefdef20148a3ce"
+        "sha256": "7b979101d30baa87efaa6987b63b94d28a83eccf61d8e37325701a8a479b68e2"
       },
       {
         "action": "copy",
@@ -109,7 +109,7 @@
         "action": "copy",
         "source": "submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEngineEditor/RichTextEngineEditorView+DocumentSelection.swift",
         "target": "submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEngineEditor/RichTextEngineEditorView+DocumentSelection.swift",
-        "sha256": "cb5e980d8d33f49e98288330dbb150e444caca03bcf39f4d0d28a2821db8774a"
+        "sha256": "852ea4469cd4cf38d3e53b6247c97815048ac0195577d64a8d096455c0d99ab1"
       },
       {
         "action": "copy",
@@ -132,7 +132,7 @@
     ],
     "patch": {
       "source": "Integration/telegram-ios.patch",
-      "sha256": "61c3b4ccc5229c7b9182728167bd3df4ad9e1d7740efdc52fb5232b727b8f7d0",
+      "sha256": "6f26c565778d49b0354d3125d551e921b9d49a02b1a1bd57db3e2bc4ef155bc3",
       "files": [
         {
           "action": "modify",
@@ -294,7 +294,7 @@
           "action": "modify",
           "target": "submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer/Sources/RichTextEditorChatInputNode.swift",
           "before_sha256": "b8cd5a8349fa5b78bc514b35f875c989a18611a6b9d17c6569599e49ed87a6a1",
-          "after_sha256": "df96dcfe0346c1e9203073e30780199b7f256a38c38da793b1b245543f972efe"
+          "after_sha256": "612d4bd7c9f05641e1f808485d640f916b70281795af16a7a5e9cc56bb793c07"
         },
         {
           "action": "modify",
@@ -319,6 +319,18 @@
           "target": "submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEngineEditor/RichTextEditorProtocol.swift",
           "before_sha256": "62f79ff0c510a3afaeaa88e6dd5f607458e1f52c20bcc9b49530448615d55d78",
           "after_sha256": "4000207bd8572243c16c3fe78d1dfdaa8b4b001d3185d96b641c39e9eb5e3000"
+        },
+        {
+          "action": "modify",
+          "target": "submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextInputDecUpstream/TextView/IDBlockTextView+TextInput.m",
+          "before_sha256": "0f8a4dd19ae64eb6fdbf2c686f651788eb001df6ad038db88c0b3e905cf5ab8f",
+          "after_sha256": "65921bf309cd5f4eae3744f4da38c82af93b90c8923ca0007ac437fa5ed4c34e"
+        },
+        {
+          "action": "modify",
+          "target": "submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextInputDecUpstream/include/IDBlockTextView.h",
+          "before_sha256": "0db3fd93a9c3c29b264a01d883f3e7b5ee5458ff98bb51f3603cfcb440780417",
+          "after_sha256": "525d7a63efa8fce51da914fa873168e9ed4756396634156dccdf4093f410deb0"
         },
         {
           "action": "modify",
@@ -348,24 +360,24 @@
         "action": "copy",
         "source": "Demo/Overlay/Tests/DraftPocketDemo/DraftPocketDemoUITests.swift",
         "target": "Tests/DraftPocketDemo/DraftPocketDemoUITests.swift",
-        "sha256": "9b117d8cdc23e0763e1fc1e300391f2ba6430b64f9706a19db0ecee0ac3d5f44"
+        "sha256": "cfd74d4ad5ef207e6404df582c10db608cf2ca4074483fb428fb493b694c3526"
       },
       {
         "action": "copy",
         "source": "Demo/Overlay/build-system/draft-pocket-xctestrunner.patch",
         "target": "build-system/draft-pocket-xctestrunner.patch",
-        "sha256": "06625f0659e890226c5c6d651cca0807518c0e900b6cbe47173cb7f98851247c"
+        "sha256": "da9dda1ce743b6511f04126c3c4dddd75945ea86bf9ab145aaa603e6fb63511d"
       },
       {
         "action": "copy",
         "source": "Demo/Overlay/submodules/TelegramCore/Sources/DraftPocketDemoBootstrap.swift",
         "target": "submodules/TelegramCore/Sources/DraftPocketDemoBootstrap.swift",
-        "sha256": "c0d5fb65f1a391be2e9ffa511961f196f685e423b61473ee39937c4fc366c30c"
+        "sha256": "9d8da5e1a02e9c3407bc19f6ebe5f1139630812405e5ad4d0efab9c95ab64823"
       }
     ],
     "patch": {
       "source": "Integration/demo.patch",
-      "sha256": "740ad772d95355335c8d14fce8cdde469dc07f2a5bfdbaf5729bd158d873b0de",
+      "sha256": "45ccda0810c3cfa7e72c5e347136289b30fd4e9b6e7e38c68ab2c0fe63245064",
       "files": [
         {
           "action": "modify",
@@ -389,7 +401,7 @@
           "action": "modify",
           "target": "submodules/TelegramUI/Sources/AppDelegate.swift",
           "before_sha256": "80c33608e1ad3982150be06f8d5175654b1d5f5ce0601afc9829739a3307e976",
-          "after_sha256": "f422490a5d09bc91a53893578c66a6b21addb8298cde28d370cb7edbab422e27"
+          "after_sha256": "10e6d7665a12a55a8d7ec3a2d0f7bee11070228b5756c8aaa524b20cd31d7812"
         },
         {
           "action": "modify",

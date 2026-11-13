@@ -6,6 +6,46 @@ import MtProtoKit
 /// Optional demo overlay. This file is not needed by Draft Pocket in normal use.
 /// No server account, login token, authorization key, or premium flag is fabricated.
 public enum DraftPocketDemo {
+    /// Fixed diagnostic vocabulary only: never persist account data, arguments, paths, or errors.
+    public enum LaunchPhase: String, Codable {
+        case launchEntered, passcodeConfigured, appGroupResolved, appGroupMissing
+        case metalInitializing, metalReady
+        case buildConfigStarted, buildConfigReady
+        case isolatedRootSelected, writeCheckPassed, writeCheckFailed, accountManagerReady
+        case sharedContextReady, unauthorizedAccountReady, seedStarted, seedCommitted
+        case authorizedRecordCommitted, authorizedContextCreated, authorizedContextReady
+        case chatRouteRequested, launchReturned
+    }
+
+    private struct LaunchRecord: Codable {
+        let phase: LaunchPhase
+        let utc: Double
+    }
+    private struct LaunchReport: Codable {
+        let schema_version: Int
+        let phases: [LaunchRecord]
+    }
+    private static let launchReportLock = NSLock()
+    private static var launchRecords: [LaunchRecord] = []
+
+    public static func recordLaunchPhase(_ phase: LaunchPhase) {
+        #if DEBUG && targetEnvironment(simulator)
+        guard self.isEnabled else { return }
+        self.launchReportLock.lock()
+        defer { self.launchReportLock.unlock() }
+        self.launchRecords.append(LaunchRecord(phase: phase, utc: Date().timeIntervalSince1970))
+        if self.launchRecords.count > 64 { self.launchRecords.removeFirst(self.launchRecords.count - 64) }
+        // The standard application data container is available before app-group resolution.
+        // This file is the only launch diagnostic exported by the isolated capture driver.
+        let directory = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+            .appendingPathComponent("Library/Caches", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        if let data = try? JSONEncoder().encode(LaunchReport(schema_version: 1, phases: self.launchRecords)) {
+            try? data.write(to: directory.appendingPathComponent("draft-pocket-demo-launch.json"), options: .atomic)
+        }
+        #endif
+    }
+
     public static var buildMarker: String? {
         #if DEBUG && targetEnvironment(simulator)
         return "DRAFT_POCKET_ISOLATED_DEMO_V1"
@@ -79,6 +119,7 @@ public enum DraftPocketDemo {
         #if DEBUG && targetEnvironment(simulator)
         // Guard the account itself as well as the launch flag. A normal account must never reach this write.
         precondition(self.isEnabled && URL(fileURLWithPath: account.rootPath).pathComponents.contains(self.directoryName))
+        self.recordLaunchPhase(.seedStarted)
         return account.postbox.transaction { transaction -> Void in
             initializedAppSettingsAfterLogin(transaction: transaction, appVersion: account.networkArguments.appVersion, syncContacts: false)
             self.seed(transaction: transaction)
@@ -91,10 +132,12 @@ public enum DraftPocketDemo {
             ))
         }
         |> mapToSignal { _ in
-            accountManager.transaction { transaction -> Void in
+            self.recordLaunchPhase(.seedCommitted)
+            return accountManager.transaction { transaction -> Void in
                 switchToAuthorizedAccount(transaction: transaction, account: account, isSupportUser: false)
             }
         }
+        |> map { _ in self.recordLaunchPhase(.authorizedRecordCommitted) }
         #else
         preconditionFailure("The offline fixture requires a debug simulator build")
         #endif

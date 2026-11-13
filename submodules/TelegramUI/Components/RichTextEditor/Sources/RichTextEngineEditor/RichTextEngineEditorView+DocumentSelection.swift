@@ -44,8 +44,34 @@ extension RichTextEngineEditorView {
         }
         guard let start = resolve(selection.start), let end = resolve(selection.end), start.offset <= end.offset,
               let nativeRange = engine.textRange(from: start.native, to: end.native) else { return false }
+        let isCollapsed = start.offset == end.offset
+        if isCollapsed, let startAffinity = selection.start.affinity, let endAffinity = selection.end.affinity,
+           startAffinity != endAffinity {
+            // One caret has one visual affinity, even when its two saved endpoints disagree.
+            return false
+        }
+        let previousRange = engine.selectedTextRange
+        let previousAffinity = engine.selectionAffinity
+        let previousStructuralSelection = tableStructuralSelection
         tableStructuralSelection = nil
         engine.selectedTextRange = nativeRange
+        if isCollapsed, let affinity = selection.start.affinity ?? selection.end.affinity {
+            // UIKit's controller can retain its previous affinity when the offsets are unchanged.
+            // Supplying positions with the desired affinity alone does not update that state.
+            engine.selectionAffinity = affinity == .upstream ? .backward : .forward
+        }
+        func matches(_ actual: DocumentTextPosition, _ expected: DocumentTextPosition) -> Bool {
+            return actual.ref == expected.ref && actual.offset == expected.offset
+                && (expected.affinity == nil || actual.affinity == expected.affinity)
+        }
+        guard let actual = documentTextSelection,
+              matches(actual.start, selection.start), matches(actual.end, selection.end) else {
+            // A rejected restore must leave the current caret/selection intact.
+            engine.selectedTextRange = previousRange
+            engine.selectionAffinity = previousAffinity
+            tableStructuralSelection = previousStructuralSelection
+            return false
+        }
         return true
     }
 }

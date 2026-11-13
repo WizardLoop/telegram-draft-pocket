@@ -11,7 +11,7 @@ The user selected a fictional `@wizardloop` conversation for the main demo. Keep
 - Telegram base: `279f89e4d4f63f17227bf877dc3d8990f22ecd58`.
 - Feature commit: use the immutable PR head SHA, not the mutable branch name.
 - Patch hash: read `feature.patch.sha256` in `Integration/files.json`; record it again beside a future capture.
-- Captures, continuous proof, poster and masters: **not produced**.
+- Completed demo, continuous scenario proof, poster and masters: **not produced**. The original failed-launch recording from run `43329950073` is retained as diagnostic evidence; see [Media](../Media/README.md). It must not be presented as a working demo.
 - Approved media: none supplied; `Demo/Assets/manifest.json` records the actual inventory.
 
 Follow [integration](../Integration/README.md), [testing](TESTING.md), [CI](CI.md), and [demo](../Demo/README.md) instructions. Do not present a failed CI run's evidence archive as a working demo.

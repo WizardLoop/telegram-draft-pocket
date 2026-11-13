@@ -2,13 +2,13 @@
 
 Put an unfinished Telegram iOS message aside, answer a quick question, and return to the draft.
 
-**Implementation draft.** The completed `d02b731` Mac run built the full app and passed all 54 hostless native cases, including media cold reopen. Three legacy UIKit selection cases passed separately. The hosted composer harness could not select its Simulator, and capture stopped at a status-bar timeout before recording. The newer database-error correction still needs native validation; no video exists. The source is on [`feature/draft-pocket`](https://github.com/WizardLoop/telegram-draft-pocket/tree/feature/draft-pocket) in [Draft PR #1](https://github.com/WizardLoop/telegram-draft-pocket/pull/1), pending review into `main`.
+**Implementation draft.** [Mac run 43329950073](https://github.com/WizardLoop/telegram-draft-pocket/actions/runs/43329950073), at `a940306`, built the full app and passed 64 of 65 native cases, including the SQL-first startup regression. One hosted composer case failed visual-affinity preservation. Three legacy UIKit selection cases passed separately. The real UI story started and was recorded, but failed before the Pocket entrypoint appeared. The source is on [`feature/draft-pocket`](https://github.com/WizardLoop/telegram-draft-pocket/tree/feature/draft-pocket) in [Draft PR #1](https://github.com/WizardLoop/telegram-draft-pocket/pull/1), pending review into `main`.
 
 ## Demo
 
-No video or poster is published. [Capture status](Media/README.md) and [handoff](docs/DOT_HANDOFF.md) identify the missing evidence. This repository does not include a mock chat or fabricated capture.
+No completed story video or poster is available. The original failed-run movie and its frame measurements are preserved as diagnostic evidence; they do not demonstrate the requested interaction. [Capture status](Media/README.md) and [handoff](docs/DOT_HANDOFF.md) identify the remaining work. This repository does not include a mock chat or fabricated capture.
 
-A previous Mac retry exhausted the runner's disk before it could upload evidence. CI now avoids an extra disposable build cache and reserves space for failure logs; a successful retry is still required.
+A previous Mac retry exhausted the runner's disk before it could upload evidence. The latest run omitted the optional disk cache, retained at least 10.645 GiB free and uploaded its evidence successfully. This measures available space, not cache savings. The remaining native failure and demo startup still require a successful retry.
 
 ## The interaction
 
@@ -20,9 +20,9 @@ You are writing a long formatted message when a quick question arrives. Open Dra
 - Atomic pocket/active-draft transfers with revision checks, safe swap, Delete/Undo and restart recovery of pending deletes.
 - Canonical rich content, structural selection, custom-emoji file metadata, reply/quote and local composer-state persistence.
 - Native composer entry and list, local English/Hebrew strings, accessibility labels, theme and Reduce Motion handling.
-- Durable media archives, transactional owners for cards/Undo/active drafts/pending messages, and explicit recovery of interrupted composer sends; byte-retention and lifecycle cases passed at `d02b731`.
+- Durable media archives, transactional owners for cards/Undo/active drafts/pending messages, and explicit recovery of interrupted composer sends; byte-retention and lifecycle cases passed at `a940306`.
 
-Media transfers require complete, verified resource bytes before the composer can be cleared. Missing or unsupported resources are refused. All 15 MediaBox and 10 Core media-lifecycle cases passed in the completed Mac run; this does not establish every upload, crash or interaction scenario. The latest SQL-first startup correction passed 114 portable checks and reconstruction on Linux, but has not run on a Mac. Hosted composer tests, the full-client story and visual QA remain outstanding. See [test evidence](docs/TESTING.md) and [limitations](docs/LIMITATIONS.md).
+Media transfers require complete, verified resource bytes before the composer can be cleared. Missing or unsupported resources are refused. All 15 MediaBox and 11 Core media-lifecycle cases passed in the latest Mac run; this does not establish every upload, crash or interaction scenario. Nine hosted composer cases passed and one affinity case failed. The current candidate addresses that defect, empty native-result arrays and missing failure diagnostics; these changes await native execution. The full-client story and visual QA remain outstanding. See [test evidence](docs/TESTING.md) and [limitations](docs/LIMITATIONS.md).
 
 Pocket cards remain on this device; the active draft uses Telegram's existing synchronization. No server API or Pocket cloud sync is added. Secret Chats, sent-message editing, unfinished recordings and independent forms are excluded.
 

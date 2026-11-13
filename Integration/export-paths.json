@@ -55,6 +55,8 @@
     "submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEditorUIKit/Canvas/DocumentCanvasView+ComposerSelection.swift",
     "submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEditorUIKit/RichTextEditorView+ComposerHost.swift",
     "submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextEngineEditor/RichTextEditorProtocol.swift",
+    "submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextInputDecUpstream/TextView/IDBlockTextView+TextInput.m",
+    "submodules/TelegramUI/Components/RichTextEditor/Sources/RichTextInputDecUpstream/include/IDBlockTextView.h",
     "submodules/TelegramUI/Sources/ChatController.swift",
     "submodules/TelegramUI/Sources/ChatControllerNode.swift"
   ]

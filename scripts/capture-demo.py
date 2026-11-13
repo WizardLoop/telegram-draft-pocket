@@ -22,6 +22,8 @@ import uuid
 import zipfile
 
 import package
+from demo_crash_report import export_crash_summaries
+from demo_diagnostics import export_launch_report
 from simulator import SimulatorSession
 
 
@@ -44,7 +46,23 @@ def native_reference(identifier):
     return identifier
 
 
-def selected_native_case(native_cases, test_filter):
+def native_array(container, key, *, optional=False):
+    """Read a native Array, including its explicit typed empty representation."""
+    if not isinstance(container, dict):
+        raise package.PackageError(f"Native xcresult has an unsupported {key} schema")
+    if key not in container and optional:
+        return []
+    wrapper = container.get(key)
+    if isinstance(wrapper, dict):
+        if "_values" not in wrapper and isinstance(wrapper.get("_type"), dict) and wrapper["_type"].get("_name") == "Array":
+            return []
+        values = wrapper.get("_values")
+        if isinstance(values, list):
+            return values
+    raise package.PackageError(f"Native xcresult has an unsupported {key} schema")
+
+
+def selected_native_case(native_cases, test_filter, *, require_success=True):
     if not isinstance(native_cases, list) or any(not isinstance(case, dict) or not isinstance(case.get("identifier"), str)
                                               or not isinstance(case.get("status"), str) for case in native_cases):
         raise package.PackageError("Scenario proof requires native xcresult test cases, not generic XML")
@@ -53,8 +71,9 @@ def selected_native_case(native_cases, test_filter):
     identity = cases[0].get("identifier", "") if len(cases) == 1 else ""
     exact_name = lambda name: re.search(r"(?<![A-Za-z0-9_])" + re.escape(name) + r"(?![A-Za-z0-9_])", identity)
     if (len(cases) != 1 or not exact_name(expected_class) or not exact_name(expected_method)
-            or cases[0].get("status") != "Success"):
-        raise package.PackageError("Native xcresult does not prove the single requested scenario passed")
+            or (require_success and cases[0].get("status") != "Success")):
+        requirement = "passed" if require_success else "ran exactly once"
+        raise package.PackageError(f"Native xcresult does not prove the single requested scenario {requirement}")
     return cases[0]
 
 
@@ -262,11 +281,7 @@ def xcresult_cases(root, read_reference):
     cases = []
 
     def values(container, key):
-        wrapper = container.get(key) if isinstance(container, dict) else None
-        result = wrapper.get("_values") if isinstance(wrapper, dict) else None
-        if not isinstance(result, list):
-            raise package.PackageError(f"Native xcresult has an unsupported {key} schema")
-        return result
+        return native_array(container, key)
 
     def value(container, key):
         wrapper = container.get(key) if isinstance(container, dict) else None
@@ -311,12 +326,15 @@ def xcresult_cases(root, read_reference):
     return cases
 
 
-def named_screenshots(summary, test_filter):
-    """Select only explicit keepAlways attachments from our successful test case."""
+def named_screenshots(summary, test_filter, *, diagnostic=False):
+    """Select only explicit named screenshots for one verified native outcome."""
     expected_method = test_filter.split("/", 1)[1]
     expected = SCREENSHOTS.get(expected_method)
     if expected is None:
         raise package.PackageError("Unknown screenshot scenario")
+    if diagnostic:
+        expected = {"demo-entrypoint-failure": 1}
+    required_status = "Failure" if diagnostic else "Success"
 
     def value(node, key):
         wrapper = node.get(key) if isinstance(node, dict) else None
@@ -324,25 +342,20 @@ def named_screenshots(summary, test_filter):
 
     identifier = value(summary, "identifier")
     if (not isinstance(identifier, str) or not re.search(r"(?<![A-Za-z0-9_])" + re.escape(expected_method)
-            + r"(?![A-Za-z0-9_])", identifier) or value(summary, "testStatus") != "Success"):
-        raise package.PackageError("Screenshot summary does not match the successful native test")
+            + r"(?![A-Za-z0-9_])", identifier) or value(summary, "testStatus") != required_status):
+        raise package.PackageError("Screenshot summary does not match the required native test outcome")
     selected, counts = [], dict.fromkeys(expected, 0)
+
+    def array(node, key):
+        return native_array(node, key, optional=True)
 
     def visit(node, key, depth=0):
         if depth > 100 or not isinstance(node, dict):
             raise package.PackageError("Invalid native screenshot activity tree")
-        wrapper = node.get(key, {"_values": []})
-        activities = wrapper.get("_values") if isinstance(wrapper, dict) else None
-        if not isinstance(activities, list):
-            raise package.PackageError("Invalid native screenshot activity schema")
-        for activity in activities:
+        for activity in array(node, key):
             if not isinstance(activity, dict):
                 raise package.PackageError("Invalid native screenshot activity")
-            wrapper = activity.get("attachments", {"_values": []})
-            attachments = wrapper.get("_values") if isinstance(wrapper, dict) else None
-            if not isinstance(attachments, list):
-                raise package.PackageError("Invalid native screenshot attachment schema")
-            for attachment in attachments:
+            for attachment in array(activity, "attachments"):
                 name = value(attachment, "name")
                 if not isinstance(name, str) or name not in expected:
                     continue
@@ -376,9 +389,12 @@ def named_screenshots(summary, test_filter):
     return selected
 
 
-def export_named_screenshots(bundle, artifacts, case, test_filter, summary):
-    selected = named_screenshots(summary, test_filter)
-    destination = package.bounded(artifacts, "screenshots")
+def export_named_screenshots(bundle, artifacts, case, test_filter, summary, *, diagnostic=False):
+    selected_native_case([case], test_filter, require_success=not diagnostic)
+    if diagnostic and case["status"] != "Failure":
+        raise package.PackageError("Failure screenshots require a failed native case")
+    selected = named_screenshots(summary, test_filter, diagnostic=diagnostic)
+    destination = package.bounded(artifacts, "failure-screenshots" if diagnostic else "screenshots")
     if destination.exists():
         raise package.PackageError("Screenshot destination already exists")
     # Export to a private temporary directory before promoting validated image files.
@@ -406,9 +422,11 @@ def export_named_screenshots(bundle, artifacts, case, test_filter, summary):
         destination.mkdir()
         for item in selected:
             shutil.copyfile(Path(temporary) / item["path"], destination / item["path"])
-    manifest = {"native_case": test_filter, "summary_ref": case["summary_ref"],
+    manifest = {"native_case": test_filter, "native_status": case["status"], "diagnostic": diagnostic,
+                "summary_ref": case["summary_ref"],
                 "native_bundle_inventory": "../native-xcresult-files.json", "screenshots": selected,
-                "note": "Unmodified explicitly named XCTest screenshots of the isolated fictional fixture; visual review is still required."}
+                "note": ("Unmodified named failure screenshot from the isolated fixture run; it does not prove entrypoint readiness or scenario success."
+                         if diagnostic else "Unmodified explicitly named XCTest screenshots of the isolated fictional fixture; visual review is still required.")}
     (destination / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
 
@@ -469,7 +487,8 @@ def copy_xcresult(outputs, destination):
     return target
 
 
-def native_results(test_directory, artifacts, redact, test_filter):
+def native_results(test_directory, artifacts, redact, test_filter, *, diagnostic=False):
+    """Preserve native identity; diagnostic mode never certifies scenario success."""
     with tempfile.TemporaryDirectory(prefix="draft-pocket-xcresult-") as temporary:
         bundle = copy_xcresult(test_directory / "test.outputs", Path(temporary))
         hashes = []
@@ -495,12 +514,14 @@ def native_results(test_directory, artifacts, redact, test_filter):
 
         cases = xcresult_cases(json.loads(root_text), read_reference)
         (artifacts / "native-xctest-cases.json").write_text(redact(json.dumps(cases, indent=2)) + "\n", encoding="utf-8")
-        case = selected_native_case(cases, test_filter)
+        case = selected_native_case(cases, test_filter, require_success=not diagnostic)
+        if diagnostic and case["status"] != "Failure":
+            return cases
         reference = native_reference(case.get("summary_ref"))
         # Keep activity text/diagnostics private. Only exact allowlisted screenshot
         # payloads and a minimal identity manifest are exported from this summary.
         summary = json.loads(package.run(command + ["--id", reference]))
-        export_named_screenshots(bundle, artifacts, case, test_filter, summary)
+        export_named_screenshots(bundle, artifacts, case, test_filter, summary, diagnostic=diagnostic)
         return cases
 
 
@@ -747,6 +768,15 @@ def capture(checkout, configuration, cache, artifacts, test_filter, *, appearanc
                         pass
             code = process.wait()
         identity["xctest_exit_code"] = code
+        if code:
+            # XCTest's real failure must survive a secondary export failure.
+            # Keep the exact native case and the named launch-failure screenshot.
+            try:
+                test_directory = checkout / "bazel-testlogs/Tests/DraftPocketDemo/DraftPocketDemoUITests"
+                native_results(test_directory, artifacts, redact, test_filter, diagnostic=True)
+            except (package.PackageError, OSError, ValueError, zipfile.BadZipFile) as native_error:
+                identity["native_failure_evidence_error"] = str(native_error)
+                secondary_errors.append("native failure evidence: " + str(native_error))
         if recorder.poll() is not None:
             raise package.PackageError("Recorder stopped before XCTest completed; take is incomplete")
         if code:
@@ -805,6 +835,23 @@ def capture(checkout, configuration, cache, artifacts, test_filter, *, appearanc
             error = error or package.PackageError("Recorder log could not be closed; raw evidence retained")
         identity["finished_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
         try:
+            if "xctest_exit_code" in identity:
+                try:
+                    identity["launch_diagnostics"] = export_launch_report(
+                        identity["udid"], config["bundle_id"],
+                        Path.home() / "Library/Developer/CoreSimulator/Devices", artifacts)
+                except (package.PackageError, OSError, ValueError):
+                    # Optional diagnostics cannot replace a real XCTest/recording
+                    # result. Never copy an unvalidated file or command response.
+                    identity["launch_diagnostics"] = {"status": "unavailable", "reason": "lookup_or_validation_failed"}
+                if identity["xctest_exit_code"] != 0:
+                    try:
+                        identity["crash_diagnostics"] = export_crash_summaries(
+                            identity["udid"], config["bundle_id"],
+                            datetime.datetime.fromisoformat(identity["recording_ready_utc"]).timestamp(),
+                            time.time(), artifacts)
+                    except (package.PackageError, OSError, ValueError):
+                        identity["crash_diagnostics"] = {"status": "unavailable", "reason": "lookup_or_validation_failed"}
             identity_path.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")
             (artifacts / "action-timeline.json").write_text(json.dumps(events, indent=2) + "\n", encoding="utf-8")
         except OSError as evidence_error:

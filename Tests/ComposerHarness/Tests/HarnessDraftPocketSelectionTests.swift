@@ -167,6 +167,7 @@ final class HarnessDraftPocketSelectionTests: XCTestCase {
         let captured = driver.node.currentInputContent()
         XCTAssertEqual(captured.selection.start.affinity, .upstream)
         XCTAssertTrue(captured.selection.isCollapsed)
+        XCTAssertEqual(driver.editor.engine.selectionAffinity, .backward)
         _ = driver.node.resignInputFirstResponder()
         driver.node.setInputContent(ChatInputContent(blocks: [HarnessEngine.paragraph("other")]),
                                     selection: .init(nsRange: NSRange(location: 0, length: 0), in: ChatInputContent(blocks: [HarnessEngine.paragraph("other")])))
@@ -176,6 +177,39 @@ final class HarnessDraftPocketSelectionTests: XCTestCase {
         let actual = try XCTUnwrap(driver.editor.engine.selectedTextRange?.start as? IDRichTextPosition)
         XCTAssertEqual(actual.affinity, .backward)
         XCTAssertEqual(driver.viewSelection(), NSRange(location: 2, length: 0))
+
+        // Affinity-only changes at the same offset must reach the actual controller in both directions.
+        for affinity in [DocumentTextAffinity.downstream, .upstream, .downstream] {
+            native = try XCTUnwrap(driver.editor.documentTextSelection)
+            native.start.affinity = affinity
+            native.end.affinity = affinity
+            XCTAssertTrue(driver.editor.setDocumentTextSelection(native))
+            let expected: UITextStorageDirection = affinity == .upstream ? .backward : .forward
+            XCTAssertEqual(driver.editor.engine.selectionAffinity, expected)
+            XCTAssertEqual((driver.editor.engine.selectedTextRange?.start as? IDRichTextPosition)?.affinity, expected)
+            XCTAssertEqual((driver.editor.engine.selectedTextRange?.end as? IDRichTextPosition)?.affinity, expected)
+            XCTAssertEqual(driver.node.currentInputContent().selection.start.affinity,
+                           affinity == .upstream ? .upstream : .downstream)
+            XCTAssertEqual(driver.viewSelection(), NSRange(location: 2, length: 0))
+        }
+
+        let before = try XCTUnwrap(driver.editor.documentTextSelection)
+        var contradictory = before
+        contradictory.start.offset = 4
+        contradictory.end.offset = 4
+        contradictory.start.affinity = .upstream
+        contradictory.end.affinity = .downstream
+        XCTAssertFalse(driver.editor.setDocumentTextSelection(contradictory))
+        XCTAssertEqual(driver.editor.documentTextSelection, before)
+        XCTAssertEqual(driver.editor.engine.selectionAffinity, .forward)
+        var invalidSnapshot = driver.node.currentInputContent().selection
+        invalidSnapshot.start.offset = 4
+        invalidSnapshot.end.offset = 4
+        invalidSnapshot.start.affinity = .upstream
+        invalidSnapshot.end.affinity = .downstream
+        XCTAssertFalse(driver.node.canRestoreInputSelection(invalidSnapshot, in: captured.content))
+        driver.node.restoreInputContent(captured.content, selection: invalidSnapshot)
+        XCTAssertEqual(driver.editor.documentTextSelection, before)
     }
 
     func testLegacyRichNodeFocusedEchoUsesCanvasFirstResponder() throws {

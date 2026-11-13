@@ -68,7 +68,16 @@ final class DraftPocketDemoUITests: XCTestCase {
         app.launchArguments = ["--draft-pocket-demo", "--draft-pocket-demo-data", namespace, "-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         if secondary { app.launchArguments.append("--draft-pocket-demo-secondary") }
         app.launch()
-        XCTAssertTrue(self.element(app, "DraftPocket.Open").waitForExistence(timeout: 45))
+        let entrypointAvailable = self.element(app, "DraftPocket.Open").waitForExistence(timeout: 45)
+        if !entrypointAvailable {
+            print("DRAFT_POCKET_LAUNCH_FAILURE {\"app_state\":\(app.state.rawValue)}")
+            // Capture the actual device even if the application has already exited.
+            let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            attachment.name = "demo-entrypoint-failure"
+            attachment.lifetime = .keepAlways
+            self.add(attachment)
+        }
+        XCTAssertTrue(entrypointAvailable, "The full client did not expose its Draft Pocket entry point")
         return app
     }
 
