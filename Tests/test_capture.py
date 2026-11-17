@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 import zipfile
@@ -20,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 SPEC = importlib.util.spec_from_file_location("capture_demo", Path(__file__).parents[1] / "scripts/capture-demo.py")
 capture = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(capture)
+from simulator import _SimulatorCommandFailure
 
 
 class CaptureSelectionTests(unittest.TestCase):
@@ -78,19 +80,35 @@ class CaptureSelectionTests(unittest.TestCase):
 class DarkCaptureFlowTests(unittest.TestCase):
     def run_take(self, artifacts, *, before=b"dark\n", after=b"dark\n", test_code=0,
                  recorder_exit=0, exit_during_provenance=None, recorder_timeout=False,
-                 native_error=None, launch_error=None, crash_error=None):
+                 native_error=None, launch_error=None, crash_error=None,
+                 emitted_timeout=False, supervision_errors=(), build_code=0, validation_error=None,
+                 status_bar_unavailable=False, framebuffer_error=None, cleanup_error=None):
         self.selection = "DraftPocketDemoUITests/testQASwapDeleteUndoRestartAndChatIsolation"
         self.trace = []
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.checkout = Path(temporary.name).resolve()
         self.session = capture.SimulatorSession(artifacts)
         self.session.udid = "CA1C775E-9033-4666-9B09-1E195CA035B5"
         self.session.runtime = "ios-runtime"
         self.session._owned = True
-        for name in ("release_build_server", "create", "prepare_framebuffer", "boot", "set_capture_status_bar",
+        for name in ("release_build_server", "create", "prepare_framebuffer", "boot",
                      "probe_framebuffer", "cleanup", "health"):
             setattr(self.session, name, mock.Mock(side_effect=lambda *args, name=name:
                 self.trace.append(name) or (self.session.udid if name == "create" else None)))
+        def cleanup():
+            self.trace.append("cleanup")
+            if cleanup_error:
+                raise cleanup_error
+            self.session._owned = False
+            self.session._delete_confirmed = True
+        self.session.cleanup.side_effect = cleanup
+        if framebuffer_error:
+            self.session.probe_framebuffer.side_effect = framebuffer_error
         def phase(name, command, **kwargs):
             self.trace.append(name)
+            if name == "status-bar" and status_bar_unavailable:
+                raise _SimulatorCommandFailure("status bar timed out", "timed_out")
             return before if name == "appearance-before-test" else after if name == "appearance-after-test" else b""
         self.session._run = mock.Mock(side_effect=phase)
         manifest = {"feature": {"patch": {"sha256": "feature"}}, "demo": {"patch": {"sha256": "demo"},
@@ -124,18 +142,38 @@ class DarkCaptureFlowTests(unittest.TestCase):
                 raise crash_error
             return {"status": "absent", "reason": "no_matching_crash_report"}
         def spawn(command, **kwargs):
-            if "--buildOnly" in command:
+            if "--scriptPath" in command:
                 self.trace.append("build")
-                return mock.Mock(stdout=[], wait=lambda: 0)
+                self.assertEqual(command[-8:-2], ["--target", manifest["demo"]["native_test_target"],
+                    "--simulatorUDID", self.session.udid, "--testFilter", self.selection])
+                self.assertFalse(Path(command[-1]).resolve().is_relative_to(artifacts.resolve()))
+                return mock.Mock(stdout=[], wait=lambda: build_code)
             if "recordVideo" in command:
                 self.trace.append("recorder")
                 (artifacts / "draft-pocket-continuous-raw.mov").write_bytes(b"test-video-placeholder")
                 return recorder
+            self.fail("Capture must not spawn Make/Bazel after boot")
+        self.plan = SimpleNamespace(output_directory=self.checkout / "verified-outputs" / "test.outputs",
+                                    test_directory=self.checkout / "verified-outputs", identity={"script_sha256": "script-hash"})
+        def validate(*args, **kwargs):
+            self.trace.append("validate")
+            self.assertEqual(args[0], self.checkout)
+            self.assertEqual(kwargs, {"target": manifest["demo"]["native_test_target"],
+                                     "test_filter": self.selection, "udid": self.session.udid})
+            if validation_error:
+                raise validation_error
+            return self.plan
+        def execute(plan, destination, *, stage, timeout_seconds, on_line):
             self.trace.append("xctest")
-            self.assertEqual(command[-6:], ["--target", manifest["demo"]["native_test_target"],
-                "--simulatorUDID", self.session.udid, "--testFilter", self.selection])
-            output = ("DRAFT_POCKET_EVENT " + json.dumps({"event": name, "utc": time.time()}) + "\n" for name in events)
-            return mock.Mock(stdout=output, wait=lambda: test_code)
+            self.assertIs(plan, self.plan)
+            self.assertEqual(destination, artifacts)
+            self.assertEqual(stage, "demo-xctest")
+            self.assertEqual(timeout_seconds, 600)
+            on_line("runner owner-secret\n")
+            for name in events:
+                on_line("DRAFT_POCKET_EVENT " + json.dumps({"event": name, "utc": time.time()}) + "\n")
+            return SimpleNamespace(returncode=test_code, timed_out=emitted_timeout,
+                                   supervision_errors=list(supervision_errors), output_directory=plan.output_directory)
         with ExitStack() as stack:
             def patch(target, name, **kwargs):
                 return stack.enter_context(mock.patch.object(target, name, **kwargs))
@@ -143,7 +181,7 @@ class DarkCaptureFlowTests(unittest.TestCase):
             patch(capture.package, "validate_package", return_value=({}, manifest))
             patch(capture.package.shutil, "which", return_value="tool")
             patch(capture.package, "load_json", return_value=config)
-            patch(capture.package, "make_command", return_value=["make", "test"])
+            self.make = patch(capture.package, "make_command", return_value=["make", "test"])
             patch(capture.package, "run", return_value=b"/owned/Telegram.app\n")
             patch(capture, "built_binary_inventory", return_value={"files": []})
             self.provenance = patch(capture, "verify_installed_binaries", side_effect=verify_provenance)
@@ -153,10 +191,12 @@ class DarkCaptureFlowTests(unittest.TestCase):
             self.crash_summary = patch(capture, "export_crash_summaries", side_effect=crash_summary)
             self.media = patch(capture, "inspect_media")
             patch(capture, "SimulatorSession", return_value=self.session)
+            self.validate = patch(capture, "validate_emitted_script", side_effect=validate)
+            self.execute = patch(capture, "run_emitted", side_effect=execute)
             patch(capture.subprocess, "Popen", side_effect=spawn)
             patch(capture, "wait_for_recorder")
             patch(capture, "print")
-            capture.capture(artifacts, artifacts / "config", artifacts / "cache", artifacts, self.selection, appearance="dark")
+            capture.capture(self.checkout, artifacts / "config", artifacts / "cache", artifacts, self.selection, appearance="dark")
 
     def test_verified_dark_runs_same_case_on_owned_uuid_and_keeps_all_evidence_gates(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -167,17 +207,84 @@ class DarkCaptureFlowTests(unittest.TestCase):
             self.assertEqual([check["phase"] for check in identity["appearance"]["checks"]], ["before-test", "after-test"])
             self.assertTrue(all(check["matched"] and check["udid"] == identity["udid"] for check in identity["appearance"]["checks"]))
             self.assertEqual(identity["reported_test_cases"], 1)
+            self.assertTrue(identity["ownership_released"])
+            self.assertEqual(identity["emitted_runner"], self.plan.identity)
+            self.assertEqual(identity["status_bar"]["status"], "applied")
             self.crash_summary.assert_not_called()
+            for before, after in zip(("create", "build", "validate", "release_build_server"),
+                                     ("build", "validate", "release_build_server", "boot")):
+                self.assertLess(self.trace.index(before), self.trace.index(after))
             self.assertLess(self.trace.index("boot"), self.trace.index("appearance-set"))
             self.assertLess(self.trace.index("appearance-before-test"), self.trace.index("recorder"))
             self.assertLess(self.trace.index("recorder"), self.trace.index("xctest"))
             self.assertLess(self.trace.index("xctest"), self.trace.index("appearance-after-test"))
             self.provenance.assert_called_once()
-            self.native.assert_called_once_with(artifacts / "bazel-testlogs/Tests/DraftPocketDemo/DraftPocketDemoUITests",
-                                                artifacts, mock.ANY, self.selection)
+            self.native.assert_called_once_with(self.plan.test_directory, artifacts, mock.ANY, self.selection,
+                                                output_directory=self.plan.output_directory)
+            self.make.assert_called_once()
             self.media.assert_called_once()
             self.session.cleanup.assert_called_once()
             self.session.create.assert_called_once()
+            self.assertNotIn("owner-secret", (artifacts / "demo-xctest.log").read_text())
+            self.assertIn("[REDACTED]", (artifacts / "demo-xctest.log").read_text())
+
+    def test_emission_or_validation_failure_cleans_created_device_before_any_boot(self):
+        for build_code, validation_error in ((7, None), (0, capture.package.PackageError("invalid emitted identity"))):
+            with self.subTest(build_code=build_code), tempfile.TemporaryDirectory() as temporary:
+                artifacts = Path(temporary)
+                with self.assertRaisesRegex(capture.package.PackageError, "failed to build/emit|invalid emitted identity"):
+                    self.run_take(artifacts, build_code=build_code, validation_error=validation_error)
+                self.session.create.assert_called_once()
+                self.session.boot.assert_not_called()
+                self.session.cleanup.assert_called_once()
+                self.execute.assert_not_called()
+                self.assertNotIn("recorder", self.trace)
+                self.assertTrue(json.loads((artifacts / "capture-identity.json").read_text())["ownership_released"])
+
+    def test_native_deadline_or_group_cleanup_failure_cannot_pass_on_zero_exit(self):
+        for timed_out, errors, message in ((True, (), "600s execution deadline"),
+                                           (False, ("owned group did not drain",), "process cleanup failed")):
+            with self.subTest(timed_out=timed_out), tempfile.TemporaryDirectory() as temporary:
+                artifacts = Path(temporary)
+                with self.assertRaisesRegex(capture.package.PackageError, message):
+                    self.run_take(artifacts, emitted_timeout=timed_out, supervision_errors=errors)
+                identity = json.loads((artifacts / "capture-identity.json").read_text())
+                self.assertEqual(identity["xctest_exit_code"], 0)
+                self.assertEqual(identity["xctest_timed_out"], timed_out)
+                self.assertEqual(identity["xctest_supervision_errors"], list(errors))
+                self.assertNotIn("reported_test_cases", identity)
+                self.native.assert_called_once_with(self.plan.test_directory, artifacts, mock.ANY, self.selection,
+                                                    diagnostic=True, output_directory=self.plan.output_directory)
+                self.provenance.assert_not_called()
+                self.recorder.send_signal.assert_called_once()
+                self.session.cleanup.assert_called_once()
+
+    def test_unavailable_cosmetic_status_bar_continues_only_with_real_framebuffer_gate(self):
+        for framebuffer_error in (None, capture.package.PackageError("framebuffer unavailable")):
+            with self.subTest(framebuffer_error=framebuffer_error), tempfile.TemporaryDirectory() as temporary:
+                artifacts = Path(temporary)
+                if framebuffer_error:
+                    with self.assertRaisesRegex(capture.package.PackageError, "framebuffer unavailable"):
+                        self.run_take(artifacts, status_bar_unavailable=True, framebuffer_error=framebuffer_error)
+                    self.execute.assert_not_called()
+                    self.assertNotIn("recorder", self.trace)
+                else:
+                    self.run_take(artifacts, status_bar_unavailable=True)
+                    self.execute.assert_called_once()
+                identity = json.loads((artifacts / "capture-identity.json").read_text())
+                self.assertEqual(identity["status_bar"]["status"], "unavailable")
+                self.assertEqual(identity["status_bar"]["reason"], "timed_out")
+                self.session.probe_framebuffer.assert_called_once()
+                self.session.cleanup.assert_called_once()
+
+    def test_failed_owned_cleanup_exposes_unreleased_device_for_next_stage_guard(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            artifacts = Path(temporary)
+            with self.assertRaisesRegex(capture.package.PackageError, "delete unconfirmed"):
+                self.run_take(artifacts, cleanup_error=capture.package.PackageError("delete unconfirmed"))
+            identity = json.loads((artifacts / "capture-identity.json").read_text())
+            self.assertFalse(identity["ownership_released"])
+            self.assertIn("delete unconfirmed", identity["cleanup_error"])
 
     def test_failed_initial_readback_prevents_recorder_and_xctest_and_cleans_device(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -208,8 +315,8 @@ class DarkCaptureFlowTests(unittest.TestCase):
             identity = json.loads((artifacts / "capture-identity.json").read_text())
             self.assertEqual(identity["xctest_exit_code"], 7)
             self.assertNotIn("reported_test_cases", identity)
-            self.native.assert_called_once_with(artifacts / "bazel-testlogs/Tests/DraftPocketDemo/DraftPocketDemoUITests",
-                                                artifacts, mock.ANY, self.selection, diagnostic=True)
+            self.native.assert_called_once_with(self.plan.test_directory, artifacts, mock.ANY, self.selection,
+                                                diagnostic=True, output_directory=self.plan.output_directory)
             self.launch_report.assert_called_once()
             self.assertEqual(identity["launch_diagnostics"]["status"], "saved")
             self.assertEqual(identity["crash_diagnostics"]["status"], "absent")
@@ -288,9 +395,13 @@ class RecorderReadinessTests(unittest.TestCase):
     def test_startup_failure_cleans_owned_device_and_never_starts_recorder_or_xctest(self):
         for failed_method, disk_failure in (("release_build_server", False), ("boot", False), ("probe_framebuffer", False), ("boot", True)):
             with self.subTest(phase=failed_method, disk_failure=disk_failure), tempfile.TemporaryDirectory() as temporary:
-                artifacts = Path(temporary)
-                session = mock.Mock(udid="CA1C775E-9033-4666-9B09-1E195CA035B5", runtime="ios-runtime")
+                artifacts = Path(temporary) / "evidence"
+                artifacts.mkdir()
+                checkout = Path(temporary) / "checkout"
+                checkout.mkdir()
+                session = mock.Mock(udid="CA1C775E-9033-4666-9B09-1E195CA035B5", runtime="ios-runtime", ownership_released=False)
                 session.create.return_value = session.udid
+                session.attempt_capture_status_bar.return_value = {"status": "applied"}
                 disk = {"failed": False}
                 def fail_startup(*args):
                     disk["failed"] = disk_failure
@@ -312,17 +423,20 @@ class RecorderReadinessTests(unittest.TestCase):
                         mock.patch.object(capture.package, "load_json", return_value=config), \
                         mock.patch.object(capture.package, "make_command", return_value=["build"]), \
                         mock.patch.object(capture, "built_binary_inventory", return_value={"files": []}), \
+                        mock.patch.object(capture, "validate_emitted_script", return_value=SimpleNamespace(identity={})), \
+                        mock.patch.object(capture, "run_emitted") as execute, \
                         mock.patch.object(capture, "SimulatorSession", return_value=session), \
                         mock.patch.object(capture.subprocess, "Popen", return_value=build) as spawn, \
                         mock.patch.object(Path, "write_text", new=write), \
                         self.assertRaisesRegex(capture.package.PackageError, "startup failed") as failure:
-                    capture.capture(artifacts, artifacts / "config", artifacts / "cache", artifacts,
+                    capture.capture(checkout, artifacts / "config", artifacts / "cache", artifacts,
                                     "DraftPocketDemoUITests/testCaptureProductionStory")
                 self.assertEqual(spawn.call_count, 1)  # Only the preparation build ran.
                 session.cleanup.assert_called_once()
-                self.assertEqual(session.method_calls[0], mock.call.release_build_server(artifacts))
+                self.assertEqual(session.method_calls[0], mock.call.create())
+                execute.assert_not_called()
                 if failed_method == "release_build_server":
-                    session.create.assert_not_called()
+                    session.create.assert_called_once()
                     session.boot.assert_not_called()
                 session.health.assert_called_once_with("capture-failure-before-recorder-stop")
                 self.assertIn("cleanup also failed", str(failure.exception))

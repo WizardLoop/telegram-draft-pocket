@@ -148,7 +148,8 @@ class DemoCrashReportTests(unittest.TestCase):
             reports.mkdir()
             output.mkdir()
             raw = self.write_report(reports)
-            result = self.export(reports, output)
+            with mock.patch.object(crash, "print") as printed:
+                result = self.export(reports, output)
             self.assertEqual(result["status"], "saved")
             self.assertEqual(result["count"], 1)
             self.assertEqual([p.name for p in output.iterdir()], [crash.OUTPUT_NAME])
@@ -156,6 +157,12 @@ class DemoCrashReportTests(unittest.TestCase):
             self.assertTrue(summary["diagnostic_only"])
             self.assertEqual(summary["reports"], [self.summarize(*self.fixture())])
             self.assertNotEqual(raw.read_bytes(), (output / crash.OUTPUT_NAME).read_bytes())
+            printed.assert_called_once()
+            line = printed.call_args.args[0]
+            self.assertTrue(line.startswith("DRAFT_POCKET_CRASH_DIAGNOSTICS "))
+            self.assertEqual(json.loads(line.split(" ", 1)[1]), summary)
+            self.assertNotIn("PRIVATE", line)
+            self.assertNotIn(str(root), line)
 
     def test_absent_or_nonmatching_report_never_means_success(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -187,7 +194,7 @@ class DemoCrashReportTests(unittest.TestCase):
             root = Path(temporary).resolve()
             for i in range(4):
                 self.write_report(root, f"report-{i}.ips")
-            with mock.patch.object(crash, "MAX_REPORTS", 2):
+            with mock.patch.object(crash, "MAX_REPORTS", 2), mock.patch.object(crash, "print"):
                 result = self.export(root, root)
             self.assertEqual(result["count"], 2)
             self.assertTrue(result["scan_limited"])

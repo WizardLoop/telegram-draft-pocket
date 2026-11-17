@@ -24,6 +24,7 @@ import zipfile
 import package
 from demo_crash_report import export_crash_summaries
 from demo_diagnostics import export_launch_report
+from emitted_test_runner import run_emitted, validate_emitted_script
 from simulator import SimulatorSession
 
 
@@ -487,10 +488,10 @@ def copy_xcresult(outputs, destination):
     return target
 
 
-def native_results(test_directory, artifacts, redact, test_filter, *, diagnostic=False):
+def native_results(test_directory, artifacts, redact, test_filter, *, diagnostic=False, output_directory=None):
     """Preserve native identity; diagnostic mode never certifies scenario success."""
     with tempfile.TemporaryDirectory(prefix="draft-pocket-xcresult-") as temporary:
-        bundle = copy_xcresult(test_directory / "test.outputs", Path(temporary))
+        bundle = copy_xcresult(output_directory if output_directory is not None else test_directory / "test.outputs", Path(temporary))
         hashes = []
         for source in sorted(p for p in bundle.rglob("*") if p.is_file()):
             checksum = hashlib.sha256()
@@ -692,23 +693,6 @@ def capture(checkout, configuration, cache, artifacts, test_filter, *, appearanc
             text = text.replace(value, "[REDACTED]")
         return text
 
-    build_command = package.make_command(checkout, configuration, cache, "test") + [
-        "--target", demo["native_test_target"], "--buildOnly"]
-    print("Preparing the exact XCTest target before starting the continuous take.", flush=True)
-    with (artifacts / "demo-test-build.log").open("w", encoding="utf-8") as log:
-        process = subprocess.Popen([str(x) for x in build_command], cwd=checkout, stdout=subprocess.PIPE,
-                                   stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
-        for line in process.stdout:
-            clean = redact(line)
-            log.write(clean)
-            log.flush()
-            print(clean, end="", flush=True)
-        if process.wait():
-            raise package.PackageError("Demo XCTest target failed to build; recording was not started")
-
-    built_binaries = built_binary_inventory(checkout, config["bundle_id"], demo["native_test_target"])
-    (artifacts / "built-binary-provenance.json").write_text(json.dumps(built_binaries, indent=2) + "\n", encoding="utf-8")
-
     session = SimulatorSession(artifacts, device_type=demo["device_type"], os_version=demo["os_version"], label="capture")
     identity = {"device_type": demo["device_type"],
                 "feature_commit": os.environ.get("DRAFT_POCKET_FEATURE_COMMIT"),
@@ -729,16 +713,43 @@ def capture(checkout, configuration, cache, artifacts, test_filter, *, appearanc
     secondary_errors = []
     events = []
     try:
-        session.release_build_server(checkout)
         udid = session.create()
         identity.update({"udid": udid, "runtime": session.runtime})
         identity_path.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")
+        # The official Bazel-emitted script contains an execution environment;
+        # keep it private in the isolated checkout, outside uploaded artifacts.
+        script_path = checkout / ".draft-pocket-runners" / udid / "demo.sh"
+        if script_path.resolve().is_relative_to(artifacts.resolve()):
+            raise package.PackageError("Emitted runner must stay outside uploaded capture artifacts")
+        script_path.parent.mkdir(mode=0o700, parents=True, exist_ok=False)
+        build_command = package.make_command(checkout, configuration, cache, "test") + [
+            "--target", demo["native_test_target"], "--simulatorUDID", udid,
+            "--testFilter", test_filter, "--scriptPath", script_path]
+        print("Preparing the exact XCTest runner before booting the owned Simulator.", flush=True)
+        with (artifacts / "demo-test-build.log").open("w", encoding="utf-8") as log:
+            process = subprocess.Popen([str(x) for x in build_command], cwd=checkout, stdout=subprocess.PIPE,
+                                       stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
+            for line in process.stdout:
+                clean = redact(line)
+                log.write(clean)
+                log.flush()
+                print(clean, end="", flush=True)
+            if process.wait():
+                raise package.PackageError("Demo XCTest runner failed to build/emit; recording was not started")
+        plan = validate_emitted_script(checkout, script_path, target=demo["native_test_target"],
+                                       test_filter=test_filter, udid=udid)
+        identity["emitted_runner"] = plan.identity
+        built_binaries = built_binary_inventory(checkout, config["bundle_id"], demo["native_test_target"])
+        (artifacts / "built-binary-provenance.json").write_text(json.dumps(built_binaries, indent=2) + "\n", encoding="utf-8")
+        identity_path.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")
+        session.release_build_server(checkout)
         session.prepare_framebuffer()
         session.boot()
         if appearance is not None:
             identity["appearance"]["checks"].append(session.set_capture_appearance(appearance))
             identity_path.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")
-        session.set_capture_status_bar()
+        identity["status_bar"] = session.attempt_capture_status_bar()
+        identity_path.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")
         session.probe_framebuffer()
         recorder_path = artifacts / "capture-recorder.log"
         recorder_log = recorder_path.open("xb")
@@ -751,12 +762,8 @@ def capture(checkout, configuration, cache, artifacts, test_filter, *, appearanc
         wait_for_recorder(recorder, recorder_path)
         identity["recording_ready_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
         identity_path.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")
-        command = package.make_command(checkout, configuration, cache, "test") + [
-            "--target", demo["native_test_target"], "--simulatorUDID", udid, "--testFilter", test_filter]
         with (artifacts / "demo-xctest.log").open("w", encoding="utf-8") as log:
-            process = subprocess.Popen([str(x) for x in command], cwd=checkout, stdout=subprocess.PIPE,
-                                       stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
-            for line in process.stdout:
+            def on_line(line):
                 clean = redact(line)
                 log.write(clean)
                 log.flush()
@@ -766,20 +773,30 @@ def capture(checkout, configuration, cache, artifacts, test_filter, *, appearanc
                         events.append(json.loads(clean.split("DRAFT_POCKET_EVENT ", 1)[1]))
                     except ValueError:
                         pass
-            code = process.wait()
+            identity["xctest_exit_code"] = None
+            identity["xctest_timeout_seconds"] = 600
+            result = run_emitted(plan, artifacts, stage="demo-xctest", timeout_seconds=600, on_line=on_line)
+        code = result.returncode
         identity["xctest_exit_code"] = code
-        if code:
+        identity["xctest_timed_out"] = result.timed_out
+        identity["xctest_supervision_errors"] = result.supervision_errors
+        failed = code != 0 or result.timed_out or bool(result.supervision_errors)
+        if failed:
             # XCTest's real failure must survive a secondary export failure.
             # Keep the exact native case and the named launch-failure screenshot.
             try:
-                test_directory = checkout / "bazel-testlogs/Tests/DraftPocketDemo/DraftPocketDemoUITests"
-                native_results(test_directory, artifacts, redact, test_filter, diagnostic=True)
+                native_results(plan.test_directory, artifacts, redact, test_filter, diagnostic=True,
+                               output_directory=plan.output_directory)
             except (package.PackageError, OSError, ValueError, zipfile.BadZipFile) as native_error:
                 identity["native_failure_evidence_error"] = str(native_error)
                 secondary_errors.append("native failure evidence: " + str(native_error))
         if recorder.poll() is not None:
             raise package.PackageError("Recorder stopped before XCTest completed; take is incomplete")
-        if code:
+        if result.timed_out:
+            raise package.PackageError("Real demo XCTest exceeded its 600s execution deadline; raw evidence retained")
+        if result.supervision_errors:
+            raise package.PackageError("Real demo XCTest process cleanup failed; raw evidence retained")
+        if code != 0:
             raise package.PackageError(f"Real demo XCTest failed with exit {code}; raw evidence retained")
         if appearance is not None:
             identity["appearance"]["checks"].append(session.verify_capture_appearance(appearance, "after-test"))
@@ -789,11 +806,10 @@ def capture(checkout, configuration, cache, artifacts, test_filter, *, appearanc
                                               udid, config["bundle_id"], built_binaries)
         (artifacts / "installed-binary-provenance.json").write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
         identity["installed_binary_provenance"] = "installed-binary-provenance.json"
-        test_directory = checkout / "bazel-testlogs/Tests/DraftPocketDemo/DraftPocketDemoUITests"
-        report = test_directory / "test.xml"
-        if report.is_file():
-            (artifacts / "bazel-wrapper.xml").write_text(redact(report.read_text(encoding="utf-8")), encoding="utf-8")
-        cases = native_results(test_directory, artifacts, redact, test_filter)
+        # Script mode has no Bazel test wrapper XML. Native results must come
+        # from this validated execution's exact, initially empty output path.
+        cases = native_results(plan.test_directory, artifacts, redact, test_filter,
+                               output_directory=plan.output_directory)
         identity["reported_test_cases"] = verify_scenario(
             cases, events, test_filter,
             datetime.datetime.fromisoformat(identity["recording_ready_utc"]).timestamp(), time.time())
@@ -866,6 +882,7 @@ def capture(checkout, configuration, cache, artifacts, test_filter, *, appearanc
                 secondary_errors.append("owned cleanup: " + str(cleanup_error))
                 error = error or cleanup_error
         identity["cleanup_finished_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        identity["ownership_released"] = session.ownership_released
         identity["secondary_errors"] = secondary_errors
         try:
             identity_path.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")

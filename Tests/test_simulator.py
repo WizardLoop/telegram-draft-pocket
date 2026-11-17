@@ -202,6 +202,37 @@ class SimulatorSessionTests(unittest.TestCase):
         with self.assertRaisesRegex(package.PackageError, "invalid identity"):
             self.session.create()
         self.assertIsNone(self.session.udid)
+        self.assertFalse(self.session.ownership_released)
+        with self.assertRaisesRegex(package.PackageError, "repeat a device creation attempt"):
+            self.session.create()
+
+    def test_ownership_release_requires_confirmed_delete_even_after_timeout(self):
+        self.assertTrue(self.session.ownership_released)
+        self.session.create()
+        self.assertFalse(self.session.ownership_released)
+        def command(args, **kwargs):
+            if args[:3] == ["xcrun", "simctl", "delete"]:
+                raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+            return self.command(args, **kwargs)
+        self.run.side_effect = command
+        with self.assertRaisesRegex(package.PackageError, "delete exceeded"):
+            self.session.cleanup()
+        self.assertFalse(self.session.ownership_released)
+        self.assertFalse(json.loads((self.session.artifacts / "simulator-lifecycle.json").read_text())["ownership_released"])
+        self.run.side_effect = self.command
+        self.session.cleanup()
+        self.assertTrue(self.session.ownership_released)
+        self.assertTrue(json.loads((self.session.artifacts / "simulator-lifecycle.json").read_text())["ownership_released"])
+
+    def test_boot_attempt_blocks_later_server_release_even_if_startup_never_completes(self):
+        self.session.create()
+        with mock.patch.object(self.session, "health", side_effect=OSError("health unavailable")), \
+                self.assertRaises(OSError):
+            self.session.boot()
+        self.run.reset_mock()
+        with self.assertRaisesRegex(package.PackageError, "before any owned Simulator boot attempt"):
+            self.session.release_build_server(self.root)
+        self.run.assert_not_called()
 
     def test_boot_timeout_keeps_partial_log_and_can_still_cleanup(self):
         self.session.create()
@@ -234,6 +265,54 @@ class SimulatorSessionTests(unittest.TestCase):
         self.assertIn(b"Waiting for SpringBoard", (self.session.artifacts / phase["log"]).read_bytes())
         self.session.cleanup()
         self.assertIsNone(self.state)
+
+    def test_cosmetic_status_bar_attempt_records_success_without_claiming_framebuffer(self):
+        self.session.create()
+        result = self.session.attempt_capture_status_bar()
+        self.assertEqual(result["status"], "applied")
+        self.assertEqual(result["udid"], self.udid)
+        self.assertEqual(result["command_phase"], "status-bar")
+        self.assertEqual(self.session.evidence["capture_status_bar"], result)
+        self.assertNotIn("framebuffer", self.session.evidence)
+
+    def test_cosmetic_status_bar_command_failure_or_timeout_remains_explicit(self):
+        self.session.create()
+        for timeout in (False, True):
+            with self.subTest(timeout=timeout):
+                def command(args, **kwargs):
+                    if args[:3] == ["xcrun", "simctl", "status_bar"]:
+                        if timeout:
+                            raise subprocess.TimeoutExpired(args, kwargs["timeout"], output=b"service busy")
+                        return subprocess.CompletedProcess(args, 7, stdout=b"service unavailable")
+                    return self.command(args, **kwargs)
+                self.run.side_effect = command
+                result = self.session.attempt_capture_status_bar()
+                self.assertEqual(result["status"], "unavailable")
+                self.assertEqual(result["reason"], "timed_out" if timeout else "command_failed")
+                self.assertEqual(result.get("returncode"), None if timeout else 7)
+                self.assertEqual(self.session.evidence["phases"][-1]["status"], "timed_out" if timeout else "failed")
+                self.session.probe_framebuffer()
+                self.assertEqual(self.session.evidence["framebuffer"]["decoded_gray_range"], 255)
+
+    def test_cosmetic_status_bar_never_swallows_ownership_or_evidence_errors(self):
+        with self.assertRaisesRegex(package.PackageError, "No Simulator"):
+            self.session.attempt_capture_status_bar()
+        self.run.assert_not_called()
+        self.session.create()
+        with mock.patch.object(self.session, "_save", side_effect=OSError("evidence unavailable")), \
+                self.assertRaisesRegex(OSError, "evidence unavailable"):
+            self.session.attempt_capture_status_bar()
+        with mock.patch.object(self.session, "set_capture_status_bar", side_effect=package.PackageError("invalid ownership")), \
+                self.assertRaisesRegex(package.PackageError, "invalid ownership"):
+            self.session.attempt_capture_status_bar()
+
+    def test_cosmetic_status_bar_failed_command_with_log_write_failure_still_raises(self):
+        self.session.create()
+        self.run.side_effect = lambda args, **kwargs: subprocess.CompletedProcess(args, 7, stdout=b"busy")
+        with mock.patch.object(Path, "write_bytes", side_effect=OSError("log unavailable")), \
+                self.assertRaisesRegex(OSError, "log unavailable"):
+            self.session.attempt_capture_status_bar()
+        self.assertNotIn("capture_status_bar", self.session.evidence)
 
     def test_capture_appearance_uses_owned_uuid_and_preserves_exact_before_after_readbacks(self):
         self.session.create()
@@ -320,6 +399,7 @@ class SimulatorSessionTests(unittest.TestCase):
         with self.assertRaisesRegex(package.PackageError, "shutdown-state exceeded 60s"):
             self.session.cleanup()
         self.assertIsNone(self.state)
+        self.assertTrue(self.session.ownership_released)
         deletes = [args for args in self.commands if args[:3] == ["xcrun", "simctl", "delete"]]
         self.assertEqual(deletes, [["xcrun", "simctl", "delete", self.udid]])
 
@@ -432,6 +512,7 @@ class HostedBuildServerTests(unittest.TestCase):
         self.reported_base = self.base
         self.info_code = self.shutdown_code = 0
         self.shutdown_timeout = False
+        self.device_inventory = None
         self.environment = mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true",
             "RUNNER_ENVIRONMENT": "github-hosted", "RUNNER_TEMP": str(self.root)}, clear=True)
         self.environment.start()
@@ -448,6 +529,9 @@ class HostedBuildServerTests(unittest.TestCase):
 
     def command(self, command, **kwargs):
         self.calls.append(command)
+        if command[:4] == ["xcrun", "simctl", "list", "devices"]:
+            self.assertEqual(kwargs["timeout"], 30)
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps(self.device_inventory).encode())
         self.assertEqual(Path(command[0]), self.binary)
         self.assertEqual(kwargs["cwd"], self.checkout)
         self.assertIn("--noblock_for_lock", command)
@@ -472,6 +556,54 @@ class HostedBuildServerTests(unittest.TestCase):
         self.assertEqual(self.output_file.read_bytes(), b"compiled artifact")
         self.assertEqual(self.session.evidence["build_server_release"]["status"], "passed")
         self.assertIsNone(self.session.udid)
+
+    def own_unbooted_device(self):
+        self.session.udid = "CA1C775E-9033-4666-9B09-1E195CA035B5"
+        self.session.runtime = "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
+        self.session._creation_attempted = self.session._owned = True
+        self.device_inventory = {"devices": {self.session.runtime: [
+            {"udid": self.session.udid, "state": "Shutdown"}]}}
+
+    def test_verified_owned_shutdown_device_allows_server_release_before_boot(self):
+        self.own_unbooted_device()
+        self.session.release_build_server(self.checkout)
+        record = self.session.evidence["build_server_release"]
+        self.assertEqual(record["status"], "passed")
+        self.assertEqual(record["owned_state"], "Shutdown")
+        self.assertEqual(record["owned_udid"], self.session.udid)
+        self.assertEqual(self.calls[0][:4], ["xcrun", "simctl", "list", "devices"])
+        self.assertEqual(self.calls[1][-3:], ["info", "workspace", "output_base"])
+        self.assertFalse(self.session.ownership_released)
+        self.assertFalse(self.session._boot_attempted)
+
+    def test_nonshutdown_foreign_missing_duplicate_or_invalid_device_prevents_bazel(self):
+        self.own_unbooted_device()
+        item = {"udid": self.session.udid, "state": "Shutdown"}
+        inventories = [{"devices": {self.session.runtime: [{**item, "state": state}]}}
+                       for state in ("Booted", "Creating", None)]
+        inventories += [{"devices": {"wrong-runtime": [item]}},
+                        {"devices": {self.session.runtime: [{**item, "udid": "FA1C775E-9033-4666-9B09-1E195CA035B5"}]}},
+                        {"devices": {self.session.runtime: [item, item]}},
+                        {"devices": []}]
+        for inventory in inventories:
+            with self.subTest(inventory=inventory):
+                self.calls.clear()
+                self.device_inventory = inventory
+                with self.assertRaises(package.PackageError):
+                    self.session.release_build_server(self.checkout)
+                self.assertEqual(len(self.calls), 1)
+                self.assertEqual(self.calls[0][:4], ["xcrun", "simctl", "list", "devices"])
+
+    def test_unowned_or_previously_booted_device_is_rejected_before_queries(self):
+        self.own_unbooted_device()
+        self.session._owned = False
+        with self.assertRaisesRegex(package.PackageError, "No Simulator"):
+            self.session.release_build_server(self.checkout)
+        self.session._owned = True
+        self.session._boot_attempted = True
+        with self.assertRaisesRegex(package.PackageError, "before any owned Simulator boot attempt"):
+            self.session.release_build_server(self.checkout)
+        self.assertEqual(self.calls, [])
 
     def test_local_or_self_hosted_server_is_never_touched(self):
         for environment in ({"GITHUB_ACTIONS": "false"}, {"RUNNER_ENVIRONMENT": "self-hosted"}):

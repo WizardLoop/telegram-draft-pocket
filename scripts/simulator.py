@@ -14,6 +14,14 @@ import uuid
 import package
 
 
+class _SimulatorCommandFailure(package.PackageError):
+    """A completed nonzero command or bounded timeout, not an ownership/IO error."""
+
+    def __init__(self, message, reason, returncode=None):
+        super().__init__(message)
+        self.reason, self.returncode = reason, returncode
+
+
 def utc_now():
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
@@ -62,12 +70,27 @@ class SimulatorSession:
         self.device_type, self.os_version, self.label = device_type, os_version, label
         self.udid, self.runtime = None, None
         self._owned = False
+        self._creation_attempted = False
+        self._delete_confirmed = False
+        self._boot_attempted = False
         self._restore_renderer = False
         self._cleanup_evidence_errors = []
         self.evidence = {"schema_version": 1, "label": label, "device_type": device_type,
                          "os_version": os_version, "created_utc": utc_now(), "phases": [], "health": []}
 
+    @property
+    def ownership_released(self):
+        """No device creation was attempted, or our exact device was deleted.
+
+        A failed create without a returned UUID is deliberately unconfirmed.
+        This concerns device ownership; other cleanup errors still propagate.
+        """
+        return not self._owned and (self._delete_confirmed
+            or (not self._creation_attempted and self.udid is None))
+
     def _save(self):
+        self.evidence["ownership_released"] = self.ownership_released
+        self.evidence["boot_attempted"] = self._boot_attempted
         (self.artifacts / "simulator-lifecycle.json").write_text(
             json.dumps(self.evidence, indent=2) + "\n", encoding="utf-8")
 
@@ -91,13 +114,15 @@ class SimulatorSession:
             output = result.stdout or b""
             phase["returncode"] = result.returncode
             if result.returncode not in allowed_codes:
-                raise package.PackageError(f"Simulator {name} exited {result.returncode}; see its phase log")
+                raise _SimulatorCommandFailure(
+                    f"Simulator {name} exited {result.returncode}; see its phase log", "command_failed", result.returncode)
             phase["status"] = "passed"
             return output
         except subprocess.TimeoutExpired as error:
             output = error.output or b""
             phase["status"] = "timed_out"
-            raise package.PackageError(f"Simulator {name} exceeded {timeout}s; see its phase log") from None
+            raise _SimulatorCommandFailure(
+                f"Simulator {name} exceeded {timeout}s; see its phase log", "timed_out") from None
         except (package.PackageError, OSError):
             phase["status"] = "failed"
             raise
@@ -154,9 +179,25 @@ class SimulatorSession:
         Shutdown preserves on-disk build outputs/cache. Local and self-hosted
         workflows keep their server; no process discovery or global kill is used.
         """
-        if self._owned or self.udid is not None:
-            raise package.PackageError("Release the build server before creating the owned Simulator")
+        if self._boot_attempted:
+            raise package.PackageError("Release the build server before any owned Simulator boot attempt")
+        owned_state = None
+        if self._creation_attempted or self._owned or self.udid is not None:
+            self._require_owned()
+            try:
+                devices = json.loads(self._run("build-release-device-state",
+                    ["xcrun", "simctl", "list", "devices", "--json"], timeout=30, public_output=False))["devices"]
+                owned = [(runtime, item) for runtime, items in devices.items() for item in items
+                         if item.get("udid", "").upper() == self.udid]
+                if (len(owned) != 1 or owned[0][0] != self.runtime
+                        or owned[0][1].get("state") != "Shutdown"):
+                    raise package.PackageError("Build-server release requires the exact owned Simulator in Shutdown state")
+                owned_state = "Shutdown"
+            except (ValueError, KeyError, TypeError, AttributeError) as error:
+                raise package.PackageError("Build-server release received invalid owned-device state") from error
         record = {"status": "checking", "started_utc": utc_now()}
+        if owned_state is not None:
+            record.update(owned_udid=self.udid, owned_state=owned_state)
         self.evidence["build_server_release"] = record
         if (os.environ.get("GITHUB_ACTIONS") != "true"
                 or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted"):
@@ -231,12 +272,13 @@ class SimulatorSession:
             raise package.PackageError("Simulator discovery/create returned invalid identity data") from error
 
     def _create(self):
-        if self._owned or self.udid is not None:
-            raise package.PackageError("SimulatorSession cannot replace an existing owned device")
+        if self._creation_attempted or self._owned or self.udid is not None:
+            raise package.PackageError("SimulatorSession cannot repeat a device creation attempt")
         runtime_info = json.loads(self._run("runtimes", ["xcrun", "simctl", "list", "runtimes", "--json"]))
         device_info = json.loads(self._run("device-types", ["xcrun", "simctl", "list", "devicetypes", "--json"]))
         runtime, device = select_simulator(runtime_info, device_info, self.device_type, self.os_version)
         self.runtime = runtime["identifier"]
+        self._creation_attempted = True
         result = self._run("create", ["xcrun", "simctl", "create", "Draft Pocket " + self.label + " " + str(uuid.uuid4()),
                                       device["identifier"], self.runtime]).decode().strip()
         self.udid = str(uuid.UUID(result)).upper()
@@ -269,6 +311,7 @@ class SimulatorSession:
 
     def boot(self):
         self._require_owned()
+        self._boot_attempted = True
         self.health("before-boot")
         try:
             self._run("boot", ["xcrun", "simctl", "boot", self.udid], timeout=30)
@@ -305,6 +348,22 @@ class SimulatorSession:
         self._require_owned()
         self._run("status-bar", ["xcrun", "simctl", "status_bar", self.udid, "override",
             "--time", "9:41", "--batteryState", "charged", "--batteryLevel", "100"], timeout=60)
+
+    def attempt_capture_status_bar(self):
+        """Try cosmetic overrides; a real framebuffer probe is still required."""
+        self._require_owned()
+        result = {"status": "applied", "udid": self.udid,
+                  "requested": {"time": "9:41", "battery_state": "charged", "battery_level": 100}}
+        try:
+            self.set_capture_status_bar()
+        except _SimulatorCommandFailure as error:
+            result.update(status="unavailable", reason=error.reason)
+            if error.returncode is not None:
+                result["returncode"] = error.returncode
+        result.update(utc=utc_now(), command_phase="status-bar")
+        self.evidence["capture_status_bar"] = result
+        self._save()
+        return result
 
     def set_capture_appearance(self, appearance):
         self._require_owned()
@@ -365,6 +424,7 @@ class SimulatorSession:
             try:
                 self._run("delete", ["xcrun", "simctl", "delete", self.udid], timeout=30, cleanup=True)
                 self._owned = False
+                self._delete_confirmed = True
             except (package.PackageError, OSError) as error:
                 errors.append(str(error))
         if self._restore_renderer:

@@ -93,18 +93,53 @@ index 7a8590d5d3cfa96dde5c8a7151d15128a4fbc144..bcaa87b7e7b2af870bb6c09d89327cd3
      name = "ComposerHarnessUITestsLib",
      testonly = True,
 diff --git a/build-system/Make/Make.py b/build-system/Make/Make.py
-index 4c3a64199fab8af21e55dea47b3b7deb0eb1f64f..610661d135606cf86bd565f965db31b9b39d5b2a 100644
+index 4c3a64199fab8af21e55dea47b3b7deb0eb1f64f..eed13b6d05fada089f3e6b638f14ff3eb83652b4 100644
 --- a/build-system/Make/Make.py
 +++ b/build-system/Make/Make.py
-@@ -8,6 +8,7 @@ import tempfile
+@@ -8,6 +8,8 @@ import tempfile
  import subprocess
  import shutil
  import glob
++import stat
 +import uuid
  
  from BuildEnvironment import resolve_executable, call_executable, run_executable_with_output, BuildEnvironmentVersions, BuildEnvironment
  from ProjectGeneration import generate
-@@ -141,6 +142,8 @@ class BazelCommandLine:
+@@ -19,6 +21,33 @@ import GenerateProfiles
+ import PostboxImportCheck
+ 
+ 
++def validate_test_script_path(value):
++    # Bazel writes this script with the test environment embedded. Keep it in a
++    # caller-owned private directory and never overwrite an existing artifact.
++    value = os.fspath(value)
++    if not os.path.isabs(value):
++        raise ValueError('--scriptPath must be an absolute path')
++    value = os.path.abspath(value)
++    parent = os.path.dirname(value)
++    if os.path.islink(parent) or not os.path.isdir(parent):
++        raise ValueError('--scriptPath requires an existing, non-symlink parent directory')
++    parent_info = os.stat(parent)
++    if os.name == 'posix' and (parent_info.st_uid != os.geteuid() or stat.S_IMODE(parent_info.st_mode) & 0o077):
++        raise ValueError('--scriptPath requires a private parent directory owned by the current user')
++    if os.path.lexists(value):
++        raise ValueError('--scriptPath must not already exist')
++    return value
++
++
++def protect_test_script(path):
++    # Generation is the only action here: the caller validates the emitted
++    # script and shuts down Bazel before booting its dedicated Simulator.
++    info = os.lstat(path)
++    if not stat.S_ISREG(info.st_mode):
++        raise ValueError('Bazel did not emit a regular test script')
++    os.chmod(path, 0o700)
++
++
+ class ResolvedCodesigningData:
+     def __init__(self, aps_environment, use_xcode_managed_codesigning):
+         self.aps_environment = aps_environment
+@@ -141,6 +170,8 @@ class BazelCommandLine:
  
      def set_disable_provisioning_profiles(self):
          self.disable_provisioning_profiles = True
@@ -113,12 +148,17 @@ index 4c3a64199fab8af21e55dea47b3b7deb0eb1f64f..610661d135606cf86bd565f965db31b9
  
      def set_profile_swift(self, value):
          self.profile_swift = value
-@@ -326,18 +329,28 @@ class BazelCommandLine:
+@@ -326,18 +357,37 @@ class BazelCommandLine:
          print(subprocess.list2cmdline(combined_arguments))
          call_executable(combined_arguments)
  
 -    def invoke_test(self, test_target='Tests/AllTests'):
-+    def invoke_test(self, test_target='Tests/AllTests', simulator_udid=None, build_only=False, test_filter=None):
++    def invoke_test(self, test_target='Tests/AllTests', simulator_udid=None, build_only=False, test_filter=None, script_path=None):
++        if script_path is not None:
++            if build_only or simulator_udid is None:
++                raise ValueError('--scriptPath requires --simulatorUDID and cannot be combined with --buildOnly')
++            script_path = validate_test_script_path(script_path)
++
          combined_arguments = [
              self.build_environment.bazel_path
          ]
@@ -127,9 +167,13 @@ index 4c3a64199fab8af21e55dea47b3b7deb0eb1f64f..610661d135606cf86bd565f965db31b9
 -
 -        combined_arguments += ['--cache_test_results=no']
 -        combined_arguments += ['--test_output=errors']
-+        combined_arguments += ['build' if build_only else 'test']
++        combined_arguments += ['run' if script_path is not None else ('build' if build_only else 'test')]
 +
-+        if not build_only:
++        if script_path is not None:
++            # Bazel 9.2 serializes its TestPolicy environment, runfiles, cwd,
++            # destination and filter without executing the test target.
++            combined_arguments += ['--script_path=' + script_path]
++        elif not build_only:
 +            combined_arguments += ['--cache_test_results=no']
 +            combined_arguments += ['--test_output=all' if simulator_udid else '--test_output=errors']
 +        if simulator_udid is not None and not build_only:
@@ -147,7 +191,16 @@ index 4c3a64199fab8af21e55dea47b3b7deb0eb1f64f..610661d135606cf86bd565f965db31b9
          combined_arguments += self.common_args
          combined_arguments += self.common_build_args
          combined_arguments += self.get_define_arguments()
-@@ -605,6 +618,9 @@ def resolve_watch_provisioning_profile(arguments, base_path):
+@@ -358,6 +408,8 @@ class BazelCommandLine:
+         print('TelegramBuild: running')
+         print(subprocess.list2cmdline(combined_arguments))
+         call_executable(combined_arguments)
++        if script_path is not None:
++            protect_test_script(script_path)
+ 
+     def invoke_query(self, query_args):
+         combined_arguments = [
+@@ -605,6 +657,9 @@ def resolve_watch_provisioning_profile(arguments, base_path):
  
  
  def build(bazel, arguments):
@@ -157,7 +210,7 @@ index 4c3a64199fab8af21e55dea47b3b7deb0eb1f64f..610661d135606cf86bd565f965db31b9
      if PostboxImportCheck.run(os.getcwd()) != 0:
          sys.exit(1)
  
-@@ -631,6 +647,8 @@ def build(bazel, arguments):
+@@ -631,6 +686,8 @@ def build(bazel, arguments):
      )
  
      bazel_command_line.set_configuration(arguments.configuration)
@@ -166,7 +219,7 @@ index 4c3a64199fab8af21e55dea47b3b7deb0eb1f64f..610661d135606cf86bd565f965db31b9
      if arguments.embedWatchApp:
          if arguments.configuration in ('debug_arm64', 'release_arm64'):
              if arguments.watchApiId is None or arguments.watchApiHash is None:
-@@ -713,9 +731,12 @@ def test(bazel, arguments):
+@@ -713,9 +770,13 @@ def test(bazel, arguments):
      )
  
      bazel_command_line.set_configuration('debug_sim_arm64')
@@ -176,11 +229,12 @@ index 4c3a64199fab8af21e55dea47b3b7deb0eb1f64f..610661d135606cf86bd565f965db31b9
  
 -    bazel_command_line.invoke_test(test_target=arguments.target)
 +    bazel_command_line.invoke_test(test_target=arguments.target, simulator_udid=arguments.simulatorUDID,
-+                                  build_only=arguments.buildOnly, test_filter=arguments.testFilter)
++                                  build_only=arguments.buildOnly, test_filter=arguments.testFilter,
++                                  script_path=arguments.scriptPath)
  
  
  def query(bazel, arguments):
-@@ -947,6 +968,21 @@ if __name__ == '__main__':
+@@ -947,6 +1008,24 @@ if __name__ == '__main__':
              '''
      )
      add_project_and_build_common_arguments(testParser)
@@ -189,8 +243,11 @@ index 4c3a64199fab8af21e55dea47b3b7deb0eb1f64f..610661d135606cf86bd565f965db31b9
 +        type=lambda value: str(uuid.UUID(value)).upper(),
 +        help='Run on this existing dedicated Simulator UUID (public rules_apple destination).'
 +    )
-+    testParser.add_argument('--buildOnly', action='store_true', default=False,
-+                           help='Build the exact test target/configuration without executing tests.')
++    testModeGroup = testParser.add_mutually_exclusive_group()
++    testModeGroup.add_argument('--buildOnly', action='store_true', default=False,
++                              help='Build the exact test target/configuration without executing tests.')
++    testModeGroup.add_argument('--scriptPath', type=validate_test_script_path,
++                              help='Emit a Bazel test script at this new private absolute path; requires --simulatorUDID.')
 +    testParser.add_argument('--testFilter', type=str,
 +                           help='Forward an XCTest test selection through the pinned runner.')
 +    testParser.add_argument(
@@ -202,7 +259,7 @@ index 4c3a64199fab8af21e55dea47b3b7deb0eb1f64f..610661d135606cf86bd565f965db31b9
      testParser.add_argument(
          '--target',
          type=str,
-@@ -1025,6 +1061,12 @@ if __name__ == '__main__':
+@@ -1025,6 +1104,12 @@ if __name__ == '__main__':
          metavar='number'
      )
      add_project_and_build_common_arguments(buildParser)
@@ -215,6 +272,15 @@ index 4c3a64199fab8af21e55dea47b3b7deb0eb1f64f..610661d135606cf86bd565f965db31b9
      buildParser.add_argument(
          '--configuration',
          choices=[
+@@ -1374,6 +1459,8 @@ if __name__ == '__main__':
+         sys.exit(1)
+ 
+     args = parser.parse_args()
++    if args.commandName == 'test' and args.scriptPath is not None and args.simulatorUDID is None:
++        parser.error('--scriptPath requires --simulatorUDID')
+ 
+     if args.verbose:
+         print(args)
 diff --git a/submodules/AccountContext/Sources/ChatController.swift b/submodules/AccountContext/Sources/ChatController.swift
 index 1fca36ca9d938e4dabcce753ce025c814c12c7b3..4ad2c9877c3d974d12408a91aa6a6c375338b413 100644
 --- a/submodules/AccountContext/Sources/ChatController.swift

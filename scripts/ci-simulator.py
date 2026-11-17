@@ -10,6 +10,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import uuid
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -17,6 +18,56 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import package
 from disk_guard import DiskGuard, DiskGuardError
 from simulator import select_simulator
+
+
+def capture_cleanup_confirmed(artifacts):
+    """Require device and attempted runner cleanup before starting another lane."""
+    def read(path):
+        if path.is_symlink() or path.stat().st_size > 1024 * 1024:
+            raise ValueError("Invalid cleanup evidence")
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(value, dict):
+            raise ValueError("Invalid cleanup evidence")
+        return value
+
+    observed = []
+    for name in ("story", "qa", "qa-dark"):
+        directory = artifacts / name
+        if not directory.exists():
+            continue
+        if directory.is_symlink() or not directory.is_dir():
+            return False
+        try:
+            evidence = read(directory / "simulator-lifecycle.json")
+            identity = read(directory / "capture-identity.json")
+            if (evidence.get("schema_version") != 1
+                    or evidence.get("label") != "capture" or evidence.get("ownership_released") is not True):
+                return False
+            if identity.get("ownership_released") is not True or identity.get("udid") != evidence.get("udid"):
+                return False
+            runner_path = directory / "emitted-demo-xctest.json"
+            if "xctest_exit_code" in identity or runner_path.exists():
+                # A deleted device does not establish that xcodebuild's process
+                # group drained. Missing execution/finalization proof fails closed.
+                runner = read(runner_path)
+                udid = identity.get("udid")
+                selection = ("DraftPocketDemoUITests/testCaptureProductionStory" if name == "story"
+                             else "DraftPocketDemoUITests/testQASwapDeleteUndoRestartAndChatIsolation")
+                if not isinstance(udid, str) or str(uuid.UUID(udid)).upper() != udid:
+                    return False
+                if (type(identity.get("xctest_exit_code")) is not int or type(runner.get("returncode")) is not int
+                        or runner.get("returncode") != identity["xctest_exit_code"]
+                        or runner.get("udid") != identity.get("udid")
+                        or runner.get("test_filter") != selection or identity.get("test_filter") != selection
+                        or runner.get("source") != "bazel-9.2-run-script"
+                        or runner.get("supervision_errors") != [] or runner.get("timed_out") is not False
+                        or identity.get("xctest_supervision_errors") != []
+                        or identity.get("xctest_timed_out") is not False):
+                    return False
+        except (OSError, ValueError):
+            return False
+        observed.append(name)
+    return bool(observed)
 
 
 def main(argv=None):
@@ -213,7 +264,7 @@ def main(argv=None):
                          "--build-number", build_number, *demo_flags])
         status["stages"][stage] = "passed"
         # Capture gets a clean Simulator lane and the available post-build time.
-        # Both checks remain independent: a failed capture still runs native tests.
+        # A failed capture may still run native tests once owned-device cleanup is proven.
         stage = "capture"
         status["stages"][stage] = "running"
         save()
@@ -227,6 +278,14 @@ def main(argv=None):
             record_failure(stage, error)
         else:
             status["stages"][stage] = "passed"
+        if with_demo:
+            status["capture_cleanup_confirmed"] = capture_cleanup_confirmed(args.artifacts)
+            if not status["capture_cleanup_confirmed"]:
+                reason = "Native tests were not started because capture device/runner cleanup was not confirmed"
+                status["native_tests_skip_reason"] = reason
+                prior = status.get("failures", {}).get("capture")
+                record_failure("capture", package.PackageError((prior + "; " if prior else "") + reason))
+                return 1
         stage = "native_tests"
         status["stages"][stage] = "running"
         save()

@@ -603,10 +603,15 @@ def add_cache_arguments(parser, *, required=False):
 def run_native_tests(checkout, configuration, cache, targets, simulator_config=None, artifacts=None):
     if not targets:
         raise PackageError("No native feature test targets are registered in BASE.json")
-    # Compile before booting a full Simulator. A timed-out hosted XCTest must
-    # not leave an unknown runner-created device alive during later stages.
+    # Emit every exact native runner before boot. Restarting Bazel after boot
+    # would repeat analysis alongside the Simulator and hosted XCTest process.
+    from emitted_test_runner import validate_emitted_script, run_emitted
+    from simulator import SimulatorSession
     specifications = [native_test_spec(entry) for entry in targets]
+    if len({target for target, _ in specifications}) != len(specifications):
+        raise PackageError("Native target inventory must not reuse a target output directory")
     simulator_config = native_simulator_spec(simulator_config)
+    checkout = Path(checkout).resolve()
     artifacts = Path(artifacts) if artifacts is not None else Path(tempfile.mkdtemp(prefix="draft-pocket-native-"))
     artifacts.mkdir(parents=True, exist_ok=True)
     report = {"simulator": simulator_config, "targets": [
@@ -626,32 +631,39 @@ def run_native_tests(checkout, configuration, cache, targets, simulator_config=N
 
     print(f"Native Simulator evidence: {artifacts.resolve()}", flush=True)
     save()
-    runnable = []
-    for index, (target, selection) in enumerate(specifications):
-        identity = target + (f" [{selection}]" if selection else "")
-        record = report["targets"][index]
-        print(f"Building native test target: {identity}", flush=True)
-        record["build"] = "running"
+    session = None
+    runnable = {}
+    try:
+        session = SimulatorSession(artifacts, label="native", **simulator_config)
+        session.create()
+        report["simulator"].update(udid=session.udid, runtime=session.runtime)
         save()
-        try:
-            run(make_command(checkout, configuration, cache, "test") + ["--target", target, "--buildOnly"],
-                cwd=checkout, capture=False)
-        except (PackageError, OSError) as error:
-            failed(record, "build", identity, error)
-        else:
-            record["build"] = "passed"
-            runnable.append(index)
+        # The emitted environment is private and is never an uploaded artifact.
+        script_directory = Path(tempfile.mkdtemp(prefix=".draft-pocket-native-", dir=checkout))
+        if script_directory.resolve().is_relative_to(artifacts.resolve()):
+            raise PackageError("Private emitted runners must be outside native artifacts")
+        for index, (target, selection) in enumerate(specifications):
+            identity = target + (f" [{selection}]" if selection else "")
+            record = report["targets"][index]
+            print(f"Building native test target: {identity}", flush=True)
+            record["build"] = "running"
             save()
-
-    if runnable:
-        from simulator import SimulatorSession
-        session = None
-        try:
-            session = SimulatorSession(artifacts, label="native", **simulator_config)
+            try:
+                script_path = script_directory / f"target-{index}.sh"
+                selection_args = ["--testFilter", selection] if selection else []
+                run(make_command(checkout, configuration, cache, "test") +
+                    ["--target", target, "--simulatorUDID", session.udid,
+                     "--scriptPath", script_path, *selection_args], cwd=checkout, capture=False)
+                plan = validate_emitted_script(checkout, script_path, target=target,
+                                               test_filter=selection, udid=session.udid)
+            except (PackageError, OSError) as error:
+                failed(record, "build", identity, error)
+            else:
+                record.update(build="passed", emitted_script=plan.identity)
+                runnable[index] = plan
+                save()
+        if runnable:
             session.release_build_server(checkout)
-            session.create()
-            report["simulator"].update(udid=session.udid, runtime=session.runtime)
-            save()
             session.boot()
             needs_reset = False
             for index in runnable:
@@ -663,14 +675,20 @@ def run_native_tests(checkout, configuration, cache, targets, simulator_config=N
                 target, selection = specifications[index]
                 identity = target + (f" [{selection}]" if selection else "")
                 record = report["targets"][index]
-                selection_args = ["--testFilter", selection] if selection else []
                 print(f"Starting native test target: {identity}", flush=True)
                 record["test"] = "running"
                 save()
+                supervision_failed = False
                 try:
-                    run(make_command(checkout, configuration, cache, "test") +
-                        ["--target", target, "--simulatorUDID", session.udid, *selection_args],
-                        cwd=checkout, capture=False)
+                    result = run_emitted(runnable[index], artifacts, stage=f"native-{index}",
+                        timeout_seconds=600, on_line=lambda line: print(line, end="", flush=True))
+                    record["execution"] = {"returncode": result.returncode, "timed_out": result.timed_out,
+                        "supervision_errors": result.supervision_errors,
+                        "output_directory": str(result.output_directory)}
+                    supervision_failed = result.timed_out or bool(result.supervision_errors)
+                    if result.returncode != 0 or result.timed_out or result.supervision_errors:
+                        raise PackageError(f"Emitted native runner exited {result.returncode}; "
+                            f"timed_out={result.timed_out}; supervision_errors={result.supervision_errors}")
                 except (PackageError, OSError) as error:
                     failed(record, "test", identity, error)
                     needs_reset = True
@@ -678,15 +696,23 @@ def run_native_tests(checkout, configuration, cache, targets, simulator_config=N
                     record["test"] = "passed"
                     print(f"Native test target PASSED: {identity}", flush=True)
                     save()
-        except (PackageError, OSError) as error:
-            report["lifecycle_errors"].append(f"Simulator setup/recovery: {error}")
-        finally:
-            if session is not None:
-                try:
-                    session.cleanup()
-                except (PackageError, OSError) as error:
-                    report["lifecycle_errors"].append(f"Simulator cleanup: {error}")
-            save()
+                if supervision_failed:
+                    # Device reset cannot prove that an uncertain runner group
+                    # drained. Do not overlap it with another native target.
+                    report["lifecycle_errors"].append("Native execution supervision failed; remaining targets were not started")
+                    break
+    except (PackageError, OSError) as error:
+        report["lifecycle_errors"].append(f"Simulator setup/recovery: {error}")
+    finally:
+        if session is not None:
+            try:
+                session.cleanup()
+            except (PackageError, OSError) as error:
+                report["lifecycle_errors"].append(f"Simulator cleanup: {error}")
+            report["ownership_released"] = session.ownership_released
+            if not session.ownership_released:
+                report["lifecycle_errors"].append("Owned Simulator cleanup was not confirmed")
+        save()
     if failures or report["lifecycle_errors"]:
         not_run = sum(item["build"] == "passed" and item["test"] == "not_run" for item in report["targets"])
         raise PackageError(f"{len(failures)} of {len(specifications)} native test targets failed; "

@@ -16,7 +16,7 @@ on:
           - full-client
           - editor
       included_usage_verified:
-        description: 'I verified up to 120 macOS minutes and 1-day artifacts fit existing included usage; no charges'
+        description: 'I verified up to 160 macOS minutes and 1-day artifacts fit existing included usage; no charges'
         required: true
         default: false
         type: boolean
@@ -40,7 +40,7 @@ jobs:
     # Standard Apple Silicon runner, never a paid -large/-xlarge runner.
     # Private repositories are excluded by the job guard.
     runs-on: xcode-27
-    timeout-minutes: 120
+    timeout-minutes: 160
     steps:
       - uses: actions/checkout@v4
         with:
@@ -50,7 +50,9 @@ jobs:
           python-version: '3.13'
       - name: Verify exact toolchain, reconstruct, build, test and attempt real capture
         # Leave time for failure evidence upload before the job's hard limit.
-        timeout-minutes: 110
+        # The last measured app build alone took 69 minutes. Bound the entire
+        # attempt while allowing the native checks and two real capture takes.
+        timeout-minutes: 150
         env:
           DRAFT_POCKET_BUILD_CONFIGURATION_JSON: ${{ secrets.DRAFT_POCKET_BUILD_CONFIGURATION_JSON }}
           DRAFT_POCKET_FEATURE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}

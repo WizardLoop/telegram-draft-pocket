@@ -87,5 +87,8 @@ def export_launch_report(udid, bundle_id, simulator_home, artifacts):
     destination = artifacts / "demo-launch-phases.json"
     with destination.open("xb") as output:
         output.write(content)
+    # Keep the validated enum-only evidence in the ordinary CI log as well:
+    # short-lived downloadable artifacts may expire during a disconnected session.
+    print("DRAFT_POCKET_LAUNCH_DIAGNOSTICS " + json.dumps(report, separators=(",", ":")), flush=True)
     return {"status": "saved", "path": destination.name, "bytes": len(content),
             "sha256": hashlib.sha256(content).hexdigest(), "count": len(report["phases"])}

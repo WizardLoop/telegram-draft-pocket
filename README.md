@@ -2,13 +2,13 @@
 
 Put an unfinished Telegram iOS message aside, answer a quick question, and return to the draft.
 
-**Implementation draft.** [Mac run 43329950073](https://github.com/WizardLoop/telegram-draft-pocket/actions/runs/43329950073), at `a940306`, built the full app and passed 64 of 65 native cases, including the SQL-first startup regression. One hosted composer case failed visual-affinity preservation. Three legacy UIKit selection cases passed separately. The real UI story started and was recorded, but failed before the Pocket entrypoint appeared. The source is on [`feature/draft-pocket`](https://github.com/WizardLoop/telegram-draft-pocket/tree/feature/draft-pocket) in [Draft PR #1](https://github.com/WizardLoop/telegram-draft-pocket/pull/1), pending review into `main`.
+**Implementation draft.** The latest [Mac run 43345627894](https://github.com/WizardLoop/telegram-draft-pocket/actions/runs/43345627894), at `f6f634b`, built the full app and UI test target, but capture stopped before recording. Its retained job log shows 36 of 65 native cases passed; 29 have no result after the workflow timeout. The source is on [`feature/draft-pocket`](https://github.com/WizardLoop/telegram-draft-pocket/tree/feature/draft-pocket) in [Draft PR #1](https://github.com/WizardLoop/telegram-draft-pocket/pull/1), pending review into `main`.
 
 ## Demo
 
 No completed story video or poster is available. The original failed-run movie and its frame measurements are preserved as diagnostic evidence; they do not demonstrate the requested interaction. [Capture status](Media/README.md) and [handoff](docs/DOT_HANDOFF.md) identify the remaining work. This repository does not include a mock chat or fabricated capture.
 
-A previous Mac retry exhausted the runner's disk before it could upload evidence. The latest run omitted the optional disk cache, retained at least 10.645 GiB free and uploaded its evidence successfully. This measures available space, not cache savings. The remaining native failure and demo startup still require a successful retry.
+The current runner candidate generates verified Bazel test scripts before booting its owned Simulator, then executes them without restarting Bazel. It has not run on Mac yet. The latest upload expired before download; its job log remains preserved. No memory or disk cause is established for that failure.
 
 ## The interaction
 
@@ -22,7 +22,7 @@ You are writing a long formatted message when a quick question arrives. Open Dra
 - Native composer entry and list, local English/Hebrew strings, accessibility labels, theme and Reduce Motion handling.
 - Durable media archives, transactional owners for cards/Undo/active drafts/pending messages, and explicit recovery of interrupted composer sends; byte-retention and lifecycle cases passed at `a940306`.
 
-Media transfers require complete, verified resource bytes before the composer can be cleared. Missing or unsupported resources are refused. All 15 MediaBox and 11 Core media-lifecycle cases passed in the latest Mac run; this does not establish every upload, crash or interaction scenario. Nine hosted composer cases passed and one affinity case failed. The current candidate addresses that defect, empty native-result arrays and missing failure diagnostics; these changes await native execution. The full-client story and visual QA remain outstanding. See [test evidence](docs/TESTING.md) and [limitations](docs/LIMITATIONS.md).
+Media transfers require complete, verified resource bytes before the composer can be cleared. Missing or unsupported resources are refused. Earlier revision `a940306` passed 64/65 native cases, including all media tests; one hosted affinity case failed. Its correction has not completed that regression. Three legacy UIKit cases passed separately. The full-client story and visual QA remain outstanding. See [test evidence](docs/TESTING.md) and [limitations](docs/LIMITATIONS.md).
 
 Pocket cards remain on this device; the active draft uses Telegram's existing synchronization. No server API or Pocket cloud sync is added. Secret Chats, sent-message editing, unfinished recordings and independent forms are excluded.
 

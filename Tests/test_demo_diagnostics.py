@@ -32,13 +32,19 @@ class DemoDiagnosticsTests(unittest.TestCase):
             source.write_bytes(content)
             output = root / "evidence"
             output.mkdir()
-            with mock.patch.object(diagnostics.package, "run", return_value=str(container).encode()) as run:
+            with mock.patch.object(diagnostics.package, "run", return_value=str(container).encode()) as run, \
+                    mock.patch.object(diagnostics, "print") as printed:
                 result = diagnostics.export_launch_report(self.udid, "org.fixture", root, output)
             run.assert_called_once_with(["xcrun", "simctl", "get_app_container", self.udid, "org.fixture", "data"], timeout=15)
             self.assertEqual(result["status"], "saved")
             self.assertEqual(result["count"], 1)
             self.assertEqual((output / result["path"]).read_bytes(), content)
             self.assertEqual(result["sha256"], diagnostics.hashlib.sha256(content).hexdigest())
+            printed.assert_called_once()
+            line = printed.call_args.args[0]
+            self.assertTrue(line.startswith("DRAFT_POCKET_LAUNCH_DIAGNOSTICS "))
+            self.assertEqual(json.loads(line.split(" ", 1)[1]), self.report())
+            self.assertNotIn(str(container), line)
 
     def test_missing_file_is_reported_without_inventing_launch_success(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -92,9 +98,11 @@ class DemoDiagnosticsTests(unittest.TestCase):
             container, source = self.tree(root)
             source.write_text('{"arbitrary":"private"}')
             with mock.patch.object(diagnostics.package, "run", return_value=str(container).encode()), \
+                    mock.patch.object(diagnostics, "print") as printed, \
                     self.assertRaises(diagnostics.package.PackageError):
                 diagnostics.export_launch_report(self.udid, "org.fixture", root, root)
             self.assertFalse((root / "demo-launch-phases.json").exists())
+            printed.assert_not_called()
 
     def test_source_symlink_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:

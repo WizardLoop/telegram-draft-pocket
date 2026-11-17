@@ -225,4 +225,6 @@ def export_crash_summaries(udid, bundle_id, started_utc, finished_utc, artifacts
     with destination.open("x", encoding="utf-8") as stream:
         json.dump(output, stream, indent=2, allow_nan=False)
         stream.write("\n")
+    # This is the same rebuilt allowlist as the artifact, never the raw IPS.
+    print("DRAFT_POCKET_CRASH_DIAGNOSTICS " + json.dumps(output, separators=(",", ":"), allow_nan=False), flush=True)
     return {"status": "saved", "path": OUTPUT_NAME, "count": len(summaries), "scan_limited": limited}

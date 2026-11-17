@@ -27,6 +27,9 @@ jobs:
           python-version: '3.13'
       - name: Packaging regression tests and manifest hashes
         run: bash scripts/test.sh
+      - name: Verify actual pinned Bazel emitted scripts on Linux (not iOS)
+        timeout-minutes: 12
+        run: python3 scripts/check-emitted-runner.py --artifacts "$RUNNER_TEMP/draft-pocket-emitted-probe"
       - name: Fetch exactly pinned upstream into a separate checkout
         run: bash scripts/bootstrap-telegram.sh "$RUNNER_TEMP/telegram-ios"
       - name: Reconstruct from the package and verify every changed file
@@ -43,3 +46,12 @@ jobs:
           bash scripts/apply-feature.sh "$RUNNER_TEMP/telegram-ios" --with-demo
       - name: Declare validation boundary
         run: echo 'Packaging only. This job does not compile Swift, build iOS, run native feature tests, or validate UI/capture.'
+      - name: Preserve emitted-script compatibility evidence even after failure
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: draft-pocket-emitted-probe-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/draft-pocket-emitted-probe/
+          if-no-files-found: warn
+          retention-days: 1
+          include-hidden-files: false

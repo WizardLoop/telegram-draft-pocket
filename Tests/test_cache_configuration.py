@@ -107,18 +107,28 @@ class CacheConfigurationTests(unittest.TestCase):
             self.assertEqual(error.exception.code, 2)
             discover.assert_not_called()
 
-    def test_native_prebuild_and_execution_both_omit_disk_cache_without_losing_destination_or_filter(self):
-        session = mock.Mock(udid="CA1C775E-9033-4666-9B09-1E195CA035B5", runtime="ios-runtime")
+    def test_native_emission_omits_disk_cache_and_execution_keeps_verified_destination_filter(self):
+        self.checkout.mkdir()
+        session = mock.Mock(udid="CA1C775E-9033-4666-9B09-1E195CA035B5", runtime="ios-runtime", ownership_released=True)
         target, selection = "//Tests:Feature", "FeatureTests"
-        with mock.patch.dict(sys.modules, {"simulator": mock.Mock(SimulatorSession=mock.Mock(return_value=session))}), \
+        plan = mock.Mock(identity={"target": target, "filter": selection, "udid": session.udid})
+        result = mock.Mock(returncode=0, timed_out=False, supervision_errors=[], output_directory=self.root / "native-output")
+        validator, runner = mock.Mock(return_value=plan), mock.Mock(return_value=result)
+        with mock.patch.dict(sys.modules, {"simulator": mock.Mock(SimulatorSession=mock.Mock(return_value=session)),
+                "emitted_test_runner": mock.Mock(validate_emitted_script=validator, run_emitted=runner)}), \
                 mock.patch.object(package, "run") as execute, redirect_stdout(io.StringIO()):
             package.run_native_tests(self.checkout, self.config, None, [{"target": target, "filter": selection}],
                 simulator_config={"device_type": "iPhone 17", "os_version": "27.0"}, artifacts=self.root / "native")
         commands = [call.args[0] for call in execute.call_args_list]
-        self.assertEqual(len(commands), 2)
+        self.assertEqual(len(commands), 1)
         self.assertTrue(all("--cacheDir" not in command and None not in command for command in commands))
-        self.assertEqual(commands[0][-3:], ["--target", target, "--buildOnly"])
-        self.assertEqual(commands[1][-6:], ["--target", target, "--simulatorUDID", session.udid, "--testFilter", selection])
+        command = commands[0]
+        self.assertEqual(command[command.index("--target") + 1], target)
+        self.assertEqual(command[command.index("--simulatorUDID") + 1], session.udid)
+        self.assertEqual(command[-2:], ["--testFilter", selection])
+        script = command[command.index("--scriptPath") + 1]
+        validator.assert_called_once_with(self.checkout, script, target=target, test_filter=selection, udid=session.udid)
+        runner.assert_called_once_with(plan, self.root / "native", stage="native-0", timeout_seconds=600, on_line=mock.ANY)
         session.cleanup.assert_called_once()
 
     def test_portable_test_cli_does_not_require_a_cache(self):
