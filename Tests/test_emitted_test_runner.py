@@ -175,7 +175,7 @@ class EmittedExecutionTests(unittest.TestCase):
         self.plan = emitted.EmittedPlan(self.root, self.script, self.root / "native", self.root,
                                        TARGET, FILTER, UDID, {"script_sha256": "fixture"})
         self.validation = mock.patch.object(emitted, "validate_emitted_script", return_value=self.plan)
-        self.validation.start()
+        self.validator_mock = self.validation.start()
         self.addCleanup(self.validation.stop)
         original_guard = emitted.DiskGuard
         self.guard_instances = []
@@ -233,9 +233,7 @@ class EmittedExecutionTests(unittest.TestCase):
         self.script = self.script.with_name("interrupt.sh")
         self.plan = emitted.EmittedPlan(self.root, self.script, self.root / "native", self.root,
                                        TARGET, FILTER, UDID, {"script_sha256": "fixture"})
-        self.validation.stop()
-        self.validation = mock.patch.object(emitted, "validate_emitted_script", return_value=self.plan)
-        self.validation.start()
+        self.validator_mock.return_value = self.plan
         self.program("import time\nprint('ready', flush=True)\ntime.sleep(30)\n")
         def interrupt(_):
             raise KeyboardInterrupt()
