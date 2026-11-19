@@ -1,6 +1,7 @@
 """Storage pressure must stop only the verified command and remain a failure."""
 
 import importlib.util
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -74,6 +75,81 @@ class DiskGuardTests(unittest.TestCase):
     def finish_watcher(self):
         self.guard._thread.join(timeout=2)
         self.assertFalse(self.guard._thread.is_alive())
+
+    @contextmanager
+    def contended_reaper_poll(self):
+        # Model CPython 3.13.17 subprocess._internal_poll's documented source
+        # behavior: another thread may reap while poll returns None because its
+        # nonblocking waitpid lock acquisition fails, not because the child lives.
+        lock, acquired, release = threading.Lock(), threading.Event(), threading.Event()
+        original_poll = self.process.poll
+        def reaper():
+            with lock:
+                acquired.set()
+                release.wait(timeout=3)
+                if self.process.returncode is None:
+                    self.process.returncode = 0
+        def poll():
+            if not lock.acquire(False):
+                return None
+            try:
+                return original_poll()
+            finally:
+                lock.release()
+        worker = threading.Thread(target=reaper, daemon=True)
+        worker.start()
+        try:
+            self.assertTrue(acquired.wait(timeout=1))
+            with mock.patch.object(self.process, "poll", side_effect=poll):
+                yield
+        finally:
+            release.set()
+            worker.join(timeout=1)
+            self.assertFalse(worker.is_alive())
+
+    def claim_before_reaping(self):
+        self.guard._process = self.process
+        self.assertTrue(self.guard._claim_group())
+
+    def test_completed_leader_with_contended_poll_does_not_fail_or_signal(self):
+        self.claim_before_reaping()
+        self.process.group_alive = False
+        self.group.side_effect = ProcessLookupError()
+        with self.contended_reaper_poll():
+            self.guard._watch()
+            self.guard.raise_if_failed()
+        self.assertTrue(self.guard._group_absent)
+        self.assertEqual(self.signals(), [])
+        self.assertEqual(self.kill.call_args_list, [mock.call(self.process.pid, 0)])
+
+    def test_descendant_group_remains_owned_when_reaped_leader_poll_is_contended(self):
+        self.claim_before_reaping()
+        self.group.side_effect = ProcessLookupError()
+        with self.contended_reaper_poll():
+            self.assertTrue(self.guard._group_alive())
+            self.guard._terminate_owned()
+            self.guard.raise_if_failed()
+        self.assertTrue(self.guard._group_absent)
+        self.assertEqual(self.signals(), [(self.process.pid, signal.SIGINT)])
+        self.assertTrue(all(call.args[0] == self.process.pid for call in self.kill.call_args_list))
+
+    def test_unclaimed_missing_leader_cannot_be_adopted_from_contended_poll(self):
+        self.guard._process = self.process
+        self.group.side_effect = ProcessLookupError()
+        with self.contended_reaper_poll(), self.assertRaisesRegex(disk.DiskGuardError, "before ownership verification"):
+            self.guard._claim_group()
+        self.assertIsNone(self.guard._pgid)
+        self.kill.assert_not_called()
+
+    def test_living_changed_group_still_fails_and_records_safe_reason(self):
+        self.claim_before_reaping()
+        self.group.return_value = self.process.pid + 1
+        self.guard._watch()
+        with self.assertRaisesRegex(disk.DiskGuardError, "changed process group"):
+            self.guard.raise_if_failed()
+        record = next(item for item in self.records() if item["status"] == "watcher-failed")
+        self.assertEqual(record["guard_error"], "Attached command changed process group; refusing to signal")
+        self.kill.assert_not_called()
 
     def test_low_space_preflight_prevents_command_attachment(self):
         self.space.return_value.free = 3 * 1024 ** 3 - 1

@@ -124,8 +124,11 @@ class DiskGuard:
                     raise DiskGuardError("Attached command changed process group; refusing to signal")
                 return True
             except ProcessLookupError:
-                if self._process.poll() is None:
-                    raise DiskGuardError("Attached process vanished before ownership could be checked") from None
+                # Popen.poll() can return None while another thread holds its
+                # waitpid lock, even after that thread reaped the leader. Once
+                # ownership is established, probe ONLY the captured group below;
+                # cached process status cannot decide whether descendants remain.
+                pass
         # The leader can exit on SIGINT before its children. The captured group
         # remains task-owned until it disappears. Never discover another group,
         # and never signal this numeric ID again after observing its absence.
@@ -215,8 +218,11 @@ class DiskGuard:
                     return
                 self._stop.wait(self.interval_seconds)
         except BaseException as error:
-            self._fail("Disk watcher failed (" + type(error).__name__ + ")")
-            self._record("watcher-failed", error_type=type(error).__name__)
+            # Our own errors contain fixed ownership messages, never argv/env.
+            # Retain their reason so an actual runner failure is diagnosable.
+            detail = str(error) if type(error) is DiskGuardError else None
+            self._fail("Disk watcher failed (" + type(error).__name__ + (": " + detail if detail else "") + ")")
+            self._record("watcher-failed", error_type=type(error).__name__, guard_error=detail)
             if not self._stop.is_set():
                 self._terminate_owned()
 
