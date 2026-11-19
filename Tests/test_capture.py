@@ -1009,8 +1009,32 @@ class DiagnosticNativeResultTests(unittest.TestCase):
             self.assertEqual(self.exported, [])
             self.assertTrue((artifacts / "native-xctest-cases.json").is_file())
 
+    def test_later_scenario_failure_exports_its_real_image_without_a_launch_failure(self):
+        for include_launch in (False, True):
+            self.setUp()
+            self.attachment["name"]["_value"] = "demo-scenario-failure"
+            expected_images = ["demo-scenario-failure-01.png"]
+            if include_launch:
+                launch = copy.deepcopy(self.attachment)
+                launch["name"]["_value"] = "demo-entrypoint-failure"
+                launch["payloadRef"]["id"]["_value"] = "0~launch"
+                self.summary["activitySummaries"]["_values"][1]["attachments"]["_values"].append(launch)
+                expected_images.append("demo-entrypoint-failure-01.png")
+            with self.subTest(include_launch=include_launch), tempfile.TemporaryDirectory() as temporary:
+                source, artifacts = self.paths(temporary)
+                with mock.patch.object(capture.package, "run", side_effect=self.tool):
+                    cases = capture.native_results(source, artifacts, lambda text: text, self.selection, diagnostic=True)
+                self.assertEqual(cases[0]["status"], "Failure")
+                with self.assertRaises(capture.package.PackageError):
+                    capture.selected_native_case(cases, self.selection)
+                manifest = json.loads((artifacts / "failure-screenshots/manifest.json").read_text())
+                self.assertEqual([entry["path"] for entry in manifest["screenshots"]], expected_images)
+                for name in expected_images:
+                    self.assertEqual((artifacts / "failure-screenshots" / name).read_bytes(), self.content)
+                self.assertFalse((artifacts / "screenshots").exists())
+
     def test_wrong_duplicate_case_or_wrong_image_retains_json_but_exports_nothing(self):
-        variants = ("wrong-case", "duplicate-case", "wrong-image", "duplicate-image", "wrong-summary-status")
+        variants = ("wrong-case", "duplicate-case", "wrong-image", "duplicate-image", "duplicate-generic-image", "wrong-summary-status")
         for variant in variants:
             self.setUp()
             if variant == "wrong-case":
@@ -1019,7 +1043,9 @@ class DiagnosticNativeResultTests(unittest.TestCase):
                 self.group["subtests"]["_values"].append(copy.deepcopy(self.leaf))
             elif variant == "wrong-image":
                 self.attachment["name"]["_value"] = "private-diagnostics"
-            elif variant == "duplicate-image":
+            elif variant in ("duplicate-image", "duplicate-generic-image"):
+                if variant == "duplicate-generic-image":
+                    self.attachment["name"]["_value"] = "demo-scenario-failure"
                 self.summary["activitySummaries"]["_values"][1]["attachments"]["_values"].append(copy.deepcopy(self.attachment))
             else:
                 self.summary["testStatus"]["_value"] = "Success"

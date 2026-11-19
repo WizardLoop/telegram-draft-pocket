@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+import re
 import sys
 import tempfile
 import unittest
@@ -43,7 +44,8 @@ class DemoDiagnosticsTests(unittest.TestCase):
             printed.assert_called_once()
             line = printed.call_args.args[0]
             self.assertTrue(line.startswith("DRAFT_POCKET_LAUNCH_DIAGNOSTICS "))
-            self.assertEqual(json.loads(line.split(" ", 1)[1]), self.report())
+            self.assertEqual(line, "DRAFT_POCKET_LAUNCH_DIAGNOSTICS schema=1 phases=launchEntered@1794500000.25")
+            self.assertNotIn("{", line)
             self.assertNotIn(str(container), line)
 
     def test_missing_file_is_reported_without_inventing_launch_success(self):
@@ -54,6 +56,19 @@ class DemoDiagnosticsTests(unittest.TestCase):
                 result = diagnostics.export_launch_report(self.udid, "org.fixture", root, root)
             self.assertEqual(result["status"], "absent")
             self.assertFalse((root / "demo-launch-phases.json").exists())
+
+    def test_exporter_accepts_exact_producer_vocabulary_and_rolling_operation_suffix(self):
+        source = (Path(__file__).resolve().parents[1] /
+                  "Demo/Overlay/submodules/TelegramCore/Sources/DraftPocketDemoBootstrap.swift").read_text(encoding="utf-8")
+        body = re.search(r"public enum LaunchPhase: String, Codable \{(.*?)^    \}", source, re.S | re.M).group(1)
+        declared = {name.strip() for line in re.findall(r"^        case (.+)$", body, re.M) for name in line.split(",")}
+        self.assertEqual(declared, diagnostics.PHASES)
+        item = {"schema_version": 1, "phases": [{"phase": name, "utc": 1794500000.25} for name in sorted(declared)]}
+        self.assertEqual(diagnostics.validate_report(json.dumps(item).encode()), item)
+        # Late QA diagnostics can contain only operation phases after the
+        # producer has discarded earlier startup records from its rolling64.
+        item["phases"] = [{"phase": "pocketStoreConflict", "utc": 1794500000.25}] * 64
+        self.assertEqual(diagnostics.validate_report(json.dumps(item).encode()), item)
 
     def test_different_device_bundle_path_and_relative_path_are_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -1,4 +1,4 @@
-"""Export only the isolated demo's enum-only launch report from its owned device."""
+"""Export only the isolated demo's enum-only phase report from its owned device."""
 
 import hashlib
 import json
@@ -19,6 +19,14 @@ PHASES = frozenset({
     "writeCheckFailed", "accountManagerReady", "sharedContextReady", "unauthorizedAccountReady",
     "seedStarted", "seedCommitted", "authorizedRecordCommitted", "authorizedContextCreated",
     "authorizedContextReady", "chatRouteRequested", "launchReturned",
+    "pocketPutAsidePressed", "pocketPutAsideBusy", "pocketPutAsideCallbackInvoked", "pocketPutAsideCallbackMissing",
+    "pocketPutAsideRequested", "pocketRestoreRequested", "pocketTransferRefused", "pocketWritingRefused", "pocketMarkedTextRefused",
+    "pocketActiveCheckStarted", "pocketActiveCheckReturned", "pocketActiveCheckScopeRefused", "pocketActiveCheckEncodingFailed",
+    "pocketActiveDraftChanged", "pocketActiveCheckAccepted", "pocketSnapshotStarted", "pocketSnapshotReady", "pocketSnapshotFailed",
+    "pocketEmptyRefused", "pocketRestoreItemMissing", "pocketRestoreSelectionRefused", "pocketRegistryRefused", "pocketRegistryAccepted",
+    "pocketStoreStarted", "pocketStoreSuccess", "pocketStoreConflict", "pocketStoreFull", "pocketStoreItemNotFound", "pocketStoreEmpty",
+    "pocketStoreUnsupportedContext", "pocketStoreMediaRetentionUnavailable", "pocketStoreCorruptStorage", "pocketStoreEncodingFailed",
+    "pocketSuccessScopeRefused", "pocketDismissRequested", "pocketDismissCompletion", "pocketDismissNotNeeded", "pocketSheetDisappeared",
 })
 
 
@@ -89,6 +97,9 @@ def export_launch_report(udid, bundle_id, simulator_home, artifacts):
         output.write(content)
     # Keep the validated enum-only evidence in the ordinary CI log as well:
     # short-lived downloadable artifacts may expire during a disconnected session.
-    print("DRAFT_POCKET_LAUNCH_DIAGNOSTICS " + json.dumps(report, separators=(",", ":")), flush=True)
+    # Multiline JSON secrets can cause GitHub to mask bare braces in log JSON.
+    # This fixed enum/numeric format remains readable without exposing data.
+    print("DRAFT_POCKET_LAUNCH_DIAGNOSTICS schema=1 phases=" +
+          ",".join(event["phase"] + "@" + str(event["utc"]) for event in report["phases"]), flush=True)
     return {"status": "saved", "path": destination.name, "bytes": len(content),
             "sha256": hashlib.sha256(content).hexdigest(), "count": len(report["phases"])}

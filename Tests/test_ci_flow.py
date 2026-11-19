@@ -71,8 +71,10 @@ class NativeTargetAggregationTests(unittest.TestCase):
         script = Path(command[command.index("--scriptPath") + 1])
         self.assertTrue(script.is_absolute())
         self.assertFalse(script.is_relative_to(self.artifacts))
+        self.assertFalse(script.is_relative_to(self.checkout))
         if os.name == "posix":
             self.assertEqual(script.parent.stat().st_mode & 0o777, 0o700)
+        script.write_text("partial emitted fixture", encoding="utf-8")
         if target in self.build_errors:
             raise self.build_errors[target]
         return b""
@@ -85,7 +87,7 @@ class NativeTargetAggregationTests(unittest.TestCase):
         if target in self.validation_errors:
             raise self.validation_errors[target]
         output = self.checkout / "verified-outputs" / target.rsplit(":", 1)[1] / "test.outputs"
-        plan = mock.Mock(target=target, output_directory=output,
+        plan = mock.Mock(target=target, output_directory=output, script_path=Path(script),
                          identity={"target": target, "test_filter": test_filter, "udid": udid})
         self.plans[target] = plan
         return plan
@@ -96,6 +98,7 @@ class NativeTargetAggregationTests(unittest.TestCase):
         self.assertTrue(stage.startswith("native-"))
         self.assertEqual(timeout_seconds, 600)
         self.trace.append(("test", plan.target))
+        Path(str(plan.script_path) + ".started").write_text("", encoding="utf-8")
         outcome = self.execution_results.get(plan.target, (0, False, []))
         if isinstance(outcome, Exception):
             raise outcome
@@ -239,6 +242,25 @@ class NativeTargetAggregationTests(unittest.TestCase):
         self.session.cleanup.assert_called_once()
         self.assertEqual([item["test"] for item in self.report()["targets"]], ["passed", "passed"])
         self.assertTrue(self.report()["ownership_released"])
+        for command in self.commands:
+            script = Path(command[command.index("--scriptPath") + 1])
+            self.assertFalse(script.parent.exists())
+
+    def test_private_cleanup_failure_is_retained_with_native_and_simulator_failures(self):
+        from private_runners import PrivateRunners
+        original = PrivateRunners.cleanup
+        def cleanup_error(storage):
+            original(storage)
+            raise ci.package.PackageError("private cleanup evidence failed")
+        self.execution_results["//Tests:One"] = (1, False, [])
+        self.lifecycle_errors["cleanup"] = ci.package.PackageError("sim cleanup failed")
+        with mock.patch.object(PrivateRunners, "cleanup", side_effect=cleanup_error, autospec=True), \
+                self.assertRaises(ci.package.PackageError) as error:
+            self.invoke(["//Tests:One"])
+        self.assertIn("exited 1", str(error.exception))
+        self.assertIn("sim cleanup failed", str(error.exception))
+        self.assertIn("private cleanup evidence failed", str(error.exception))
+        self.assertTrue(any("Private runner cleanup" in item for item in self.report()["lifecycle_errors"]))
 
     def test_silent_unconfirmed_cleanup_is_not_success(self):
         self.release_on_cleanup = False

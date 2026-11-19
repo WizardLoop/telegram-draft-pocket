@@ -606,6 +606,7 @@ def run_native_tests(checkout, configuration, cache, targets, simulator_config=N
     # Emit every exact native runner before boot. Restarting Bazel after boot
     # would repeat analysis alongside the Simulator and hosted XCTest process.
     from emitted_test_runner import validate_emitted_script, run_emitted
+    from private_runners import PrivateRunners
     from simulator import SimulatorSession
     specifications = [native_test_spec(entry) for entry in targets]
     if len({target for target, _ in specifications}) != len(specifications):
@@ -632,16 +633,16 @@ def run_native_tests(checkout, configuration, cache, targets, simulator_config=N
     print(f"Native Simulator evidence: {artifacts.resolve()}", flush=True)
     save()
     session = None
+    private_runners = None
     runnable = {}
     try:
         session = SimulatorSession(artifacts, label="native", **simulator_config)
         session.create()
         report["simulator"].update(udid=session.udid, runtime=session.runtime)
         save()
-        # The emitted environment is private and is never an uploaded artifact.
-        script_directory = Path(tempfile.mkdtemp(prefix=".draft-pocket-native-", dir=checkout))
-        if script_directory.resolve().is_relative_to(artifacts.resolve()):
-            raise PackageError("Private emitted runners must be outside native artifacts")
+        # Emitted environments must not change the exact source inventory or
+        # enter uploaded artifacts, including before a later capture/native run.
+        private_runners = PrivateRunners(checkout, artifacts)
         for index, (target, selection) in enumerate(specifications):
             identity = target + (f" [{selection}]" if selection else "")
             record = report["targets"][index]
@@ -649,7 +650,7 @@ def run_native_tests(checkout, configuration, cache, targets, simulator_config=N
             record["build"] = "running"
             save()
             try:
-                script_path = script_directory / f"target-{index}.sh"
+                script_path = private_runners.script_path(f"target-{index}.sh")
                 selection_args = ["--testFilter", selection] if selection else []
                 run(make_command(checkout, configuration, cache, "test") +
                     ["--target", target, "--simulatorUDID", session.udid,
@@ -712,6 +713,11 @@ def run_native_tests(checkout, configuration, cache, targets, simulator_config=N
             report["ownership_released"] = session.ownership_released
             if not session.ownership_released:
                 report["lifecycle_errors"].append("Owned Simulator cleanup was not confirmed")
+        if private_runners is not None:
+            try:
+                private_runners.cleanup()
+            except (PackageError, OSError) as error:
+                report["lifecycle_errors"].append(f"Private runner cleanup: {error}")
         save()
     if failures or report["lifecycle_errors"]:
         not_run = sum(item["build"] == "passed" and item["test"] == "not_run" for item in report["targets"])

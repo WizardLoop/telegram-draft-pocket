@@ -6,7 +6,7 @@ import MtProtoKit
 /// Optional demo overlay. This file is not needed by Draft Pocket in normal use.
 /// No server account, login token, authorization key, or premium flag is fabricated.
 public enum DraftPocketDemo {
-    /// Fixed diagnostic vocabulary only: never persist account data, arguments, paths, or errors.
+    /// Fixed diagnostic vocabulary only: never persist account data, arguments, paths, or error descriptions.
     public enum LaunchPhase: String, Codable {
         case launchEntered, passcodeConfigured, appGroupResolved, appGroupMissing
         case metalInitializing, metalReady
@@ -15,6 +15,15 @@ public enum DraftPocketDemo {
         case sharedContextReady, unauthorizedAccountReady, seedStarted, seedCommitted
         case authorizedRecordCommitted, authorizedContextCreated, authorizedContextReady
         case chatRouteRequested, launchReturned
+        case pocketPutAsidePressed, pocketPutAsideBusy, pocketPutAsideCallbackInvoked, pocketPutAsideCallbackMissing
+        case pocketPutAsideRequested, pocketRestoreRequested, pocketTransferRefused, pocketWritingRefused, pocketMarkedTextRefused
+        case pocketActiveCheckStarted, pocketActiveCheckReturned, pocketActiveCheckScopeRefused, pocketActiveCheckEncodingFailed
+        case pocketActiveDraftChanged, pocketActiveCheckAccepted
+        case pocketSnapshotStarted, pocketSnapshotReady, pocketSnapshotFailed, pocketEmptyRefused
+        case pocketRestoreItemMissing, pocketRestoreSelectionRefused, pocketRegistryRefused, pocketRegistryAccepted
+        case pocketStoreStarted, pocketStoreSuccess, pocketStoreConflict, pocketStoreFull, pocketStoreItemNotFound, pocketStoreEmpty
+        case pocketStoreUnsupportedContext, pocketStoreMediaRetentionUnavailable, pocketStoreCorruptStorage, pocketStoreEncodingFailed
+        case pocketSuccessScopeRefused, pocketDismissRequested, pocketDismissCompletion, pocketDismissNotNeeded, pocketSheetDisappeared
     }
 
     private struct LaunchRecord: Codable {

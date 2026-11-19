@@ -25,6 +25,7 @@ import package
 from demo_crash_report import export_crash_summaries
 from demo_diagnostics import export_launch_report
 from emitted_test_runner import run_emitted, validate_emitted_script
+from private_runners import PrivateRunners
 from simulator import SimulatorSession
 
 
@@ -334,7 +335,7 @@ def named_screenshots(summary, test_filter, *, diagnostic=False):
     if expected is None:
         raise package.PackageError("Unknown screenshot scenario")
     if diagnostic:
-        expected = {"demo-entrypoint-failure": 1}
+        expected = {"demo-entrypoint-failure": 1, "demo-scenario-failure": 1}
     required_status = "Failure" if diagnostic else "Success"
 
     def value(node, key):
@@ -385,7 +386,12 @@ def named_screenshots(summary, test_filter, *, diagnostic=False):
             visit(activity, "subactivities", depth + 1)
 
     visit(summary, "activitySummaries")
-    if counts != expected:
+    if diagnostic:
+        # A later assertion can fail after a successful app launch. Retain the
+        # explicitly named failure image without requiring a launch failure.
+        if not selected or any(count > 1 for count in counts.values()):
+            raise package.PackageError("Native failure lacks unique named diagnostic screenshots")
+    elif counts != expected:
         raise package.PackageError("Native result lacks the exact named scenario screenshots")
     return selected
 
@@ -712,16 +718,15 @@ def capture(checkout, configuration, cache, artifacts, test_filter, *, appearanc
     error = None
     secondary_errors = []
     events = []
+    private_runners = None
     try:
         udid = session.create()
         identity.update({"udid": udid, "runtime": session.runtime})
         identity_path.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")
-        # The official Bazel-emitted script contains an execution environment;
-        # keep it private in the isolated checkout, outside uploaded artifacts.
-        script_path = checkout / ".draft-pocket-runners" / udid / "demo.sh"
-        if script_path.resolve().is_relative_to(artifacts.resolve()):
-            raise package.PackageError("Emitted runner must stay outside uploaded capture artifacts")
-        script_path.parent.mkdir(mode=0o700, parents=True, exist_ok=False)
+        # Generated environments must stay outside both the exact source-file
+        # inventory and uploaded evidence, including a runner's .started marker.
+        private_runners = PrivateRunners(checkout, artifacts)
+        script_path = private_runners.script_path("demo.sh")
         build_command = package.make_command(checkout, configuration, cache, "test") + [
             "--target", demo["native_test_target"], "--simulatorUDID", udid,
             "--testFilter", test_filter, "--scriptPath", script_path]
@@ -883,6 +888,14 @@ def capture(checkout, configuration, cache, artifacts, test_filter, *, appearanc
                 error = error or cleanup_error
         identity["cleanup_finished_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
         identity["ownership_released"] = session.ownership_released
+        if private_runners is not None:
+            try:
+                private_runners.cleanup()
+                identity["private_runner_cleanup"] = "released"
+            except (package.PackageError, OSError) as private_error:
+                identity["private_runner_cleanup"] = "failed"
+                secondary_errors.append("private runner cleanup: " + str(private_error))
+                error = error or package.PackageError("Private runner cleanup failed")
         identity["secondary_errors"] = secondary_errors
         try:
             identity_path.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")

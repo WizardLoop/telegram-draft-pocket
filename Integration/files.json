@@ -360,7 +360,7 @@
         "action": "copy",
         "source": "Demo/Overlay/Tests/DraftPocketDemo/DraftPocketDemoUITests.swift",
         "target": "Tests/DraftPocketDemo/DraftPocketDemoUITests.swift",
-        "sha256": "cfd74d4ad5ef207e6404df582c10db608cf2ca4074483fb428fb493b694c3526"
+        "sha256": "928d6d4ada83555fbc62a85eaeb0975187e2a9a6ad9f8562d9b454ea3a1befbc"
       },
       {
         "action": "copy",
@@ -372,12 +372,12 @@
         "action": "copy",
         "source": "Demo/Overlay/submodules/TelegramCore/Sources/DraftPocketDemoBootstrap.swift",
         "target": "submodules/TelegramCore/Sources/DraftPocketDemoBootstrap.swift",
-        "sha256": "9d8da5e1a02e9c3407bc19f6ebe5f1139630812405e5ad4d0efab9c95ab64823"
+        "sha256": "7ecb3a5dffa494c6bc804fb4449a4b6e5b485fdc53213b32e63c5292144a08f2"
       }
     ],
     "patch": {
       "source": "Integration/demo.patch",
-      "sha256": "45ccda0810c3cfa7e72c5e347136289b30fd4e9b6e7e38c68ab2c0fe63245064",
+      "sha256": "ef4e34bbeac52f2329a98f75e398e9d86f68f14ebb820a241bce11375cbe12c9",
       "files": [
         {
           "action": "modify",
@@ -420,6 +420,18 @@
           "target": "submodules/TelegramUI/Sources/ChatController.swift",
           "before_sha256": "db10468a48df8a209bb044ad22265754454e804deedacfd6c86b9ecff6352989",
           "after_sha256": "a4fab06009c1d22691fbde191d8c27e8dde4ff9e4e5f0bf2ef8516e58b6f9887"
+        },
+        {
+          "action": "modify",
+          "target": "submodules/TelegramUI/Sources/DraftPocketController.swift",
+          "before_sha256": "cdcd2f98ab95218072b6f81ca74a05bb262f38a7d08085e0e4cc86e2feb3d609",
+          "after_sha256": "08de8305b811aea5af15a16d54cb0f0930116648d711bd070624cdf5a1897067"
+        },
+        {
+          "action": "modify",
+          "target": "submodules/TelegramUI/Sources/ChatControllerDraftPocket.swift",
+          "before_sha256": "2fff98bc3dfa9d76c4e42b6facdb6e4a61eabebd06b65ff196be7cf256c8cfb7",
+          "after_sha256": "793aab665fb5cc75346f71f38e57ace816fe3c2994b9f26b8408e3b2ab24592a"
         }
       ]
     },

@@ -3,6 +3,20 @@ import XCTest
 /// Drives the full Telegram application. No engine/store helpers are linked into this test.
 final class DraftPocketDemoUITests: XCTestCase {
     private let longDraft = "I’ve reviewed the new sticker pack. The motion feels smoother, but the final highlight needs a softer transition. I’ll send the detailed notes shortly."
+    private var recordedScenarioFailureScreenshot = false
+
+    override func record(_ issue: XCTIssue) {
+        // Capture the real screen for failures after launch too. Set the guard
+        // first so an attachment issue cannot recursively request screenshots.
+        if !self.recordedScenarioFailureScreenshot {
+            self.recordedScenarioFailureScreenshot = true
+            let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            attachment.name = "demo-scenario-failure"
+            attachment.lifetime = .keepAlways
+            self.add(attachment)
+        }
+        super.record(issue)
+    }
 
     private func event(_ name: String) {
         let value: [String: Any] = ["event": name, "utc": Date().timeIntervalSince1970]
@@ -42,7 +56,7 @@ final class DraftPocketDemoUITests: XCTestCase {
         open.tap()
         let putAside = self.element(app, "DraftPocket.PutAside")
         XCTAssertTrue(putAside.waitForExistence(timeout: 10))
-        self.wait { putAside.isEnabled }
+        self.wait { putAside.isEnabled && putAside.isHittable }
         self.event("put_aside_start")
         putAside.tap()
         self.wait { !putAside.exists }

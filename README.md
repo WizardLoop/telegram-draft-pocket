@@ -2,13 +2,13 @@
 
 Put an unfinished Telegram iOS message aside, answer a quick question, and return to the draft.
 
-**Implementation draft.** The latest [Mac run 43345627894](https://github.com/WizardLoop/telegram-draft-pocket/actions/runs/43345627894), at `f6f634b`, built the full app and UI test target, but capture stopped before recording. Its retained job log shows 36 of 65 native cases passed; 29 have no result after the workflow timeout. The source is on [`feature/draft-pocket`](https://github.com/WizardLoop/telegram-draft-pocket/tree/feature/draft-pocket) in [Draft PR #1](https://github.com/WizardLoop/telegram-draft-pocket/pull/1), pending review into `main`.
+**Implementation draft.** The latest [Mac run 43986695173](https://github.com/WizardLoop/telegram-draft-pocket/actions/runs/43986695173), at `7321a967`, built the full app and UI test target. The real story launched and typed the reminder, but the first Put Aside did not finish. Native tests did not run because private runner files dirtied the strict source inventory. The source is on [`feature/draft-pocket`](https://github.com/WizardLoop/telegram-draft-pocket/tree/feature/draft-pocket) in [Draft PR #1](https://github.com/WizardLoop/telegram-draft-pocket/pull/1), pending review into `main`.
 
 ## Demo
 
 No completed story video or poster is available. The original failed-run movie and its frame measurements are preserved as diagnostic evidence; they do not demonstrate the requested interaction. [Capture status](Media/README.md) and [handoff](docs/DOT_HANDOFF.md) identify the remaining work. This repository does not include a mock chat or fabricated capture.
 
-The current runner candidate generates verified Bazel test scripts before booting its owned Simulator, then executes them without restarting Bazel. It has not run on Mac yet. The latest upload expired before download; its job log remains preserved. No memory or disk cause is established for that failure.
+The emitted-runner flow reached actual UI interaction on Mac. Follow-up candidates move private runners outside the checkout and add a failure screenshot plus fixed operation diagnostics; neither proves the Put Aside failure repaired. The latest upload expired before download, while its original job log is preserved. No new CI attempt is active.
 
 ## The interaction
 
