@@ -1,0 +1,519 @@
+diff --git a/MODULE.bazel b/MODULE.bazel
+--- a/MODULE.bazel
++++ b/MODULE.bazel
+@@ -210,6 +210,15 @@
+     path = "./build-system/bazel-rules/rules_apple",
+ )
+ 
++# Optional Draft Pocket demo: retain explicitly attached XCTest screenshots.
++# Same transitive version selected by pinned rules_apple; no dependency upgrade.
++single_version_override(
++    module_name = "xctestrunner",
++    version = "0.2.16-20260212-4c6f493",
++    patches = ["//build-system:draft-pocket-xctestrunner.patch"],
++    patch_strip = 1,
++)
++
+ bazel_dep(name = "rules_swift", repo_name = "build_bazel_rules_swift")
+ local_path_override(
+     module_name = "rules_swift",
+diff --git a/build-system/BUILD b/build-system/BUILD
+--- a/build-system/BUILD
++++ b/build-system/BUILD
+@@ -22,4 +22,5 @@
+ 
+ exports_files([
+     "GenerateStrings/GenerateStrings.py",
++    "draft-pocket-xctestrunner.patch",
+ ])
+diff --git a/submodules/TelegramCore/Sources/Network/Network.swift b/submodules/TelegramCore/Sources/Network/Network.swift
+--- a/submodules/TelegramCore/Sources/Network/Network.swift
++++ b/submodules/TelegramCore/Sources/Network/Network.swift
+@@ -450,6 +450,7 @@
+ }
+ 
+ private func resolveNetworkEngine(accountId: AccountRecordId, context: MTContext, factory: NetworkEngineFactory?, settings: NetworkEngineSettings?, rustDisabledReason: String?, isAppExtension: Bool) -> NetworkEngine {
++    if DraftPocketDemo.isEnabled { return DraftPocketDemoNetworkEngine() }
+     let preferredEngine = settings?.engine ?? NetworkEngineSettings.defaultSettings.engine
+     guard let factory = factory else {
+         Logger.shared.log("Network", "Account \(accountId.int64): engine mtProtoKit (no factory, preferred \(preferredEngine.rawValue))")
+@@ -554,6 +555,9 @@
+                 apiEnvironment = apiEnvironment.withUpdatedSocksProxySettings(effectiveActiveServer.mtProxySettings)
+             }
+             
++            if DraftPocketDemo.isEnabled {
++                apiEnvironment = apiEnvironment.withUpdatedSocksProxySettings(draftPocketDemoLoopbackProxy)
++            }
+             apiEnvironment = apiEnvironment.withUpdatedNetworkSettings((networkSettings ?? NetworkSettings.defaultSettings).mtNetworkSettings)
+             apiEnvironment.accessHostOverride = networkSettings?.backupHostOverride
+             
+@@ -600,7 +604,7 @@
+ 
+             let baseTcpConnectionInterfaceFactory = context.makeTcpConnectionInterface
+             let isAppExtension = Bundle.main.bundlePath.hasSuffix(".appex")
+-            let initialActiveServer = proxySettings?.effectiveActiveServer
++            let initialActiveServer = DraftPocketDemo.isEnabled ? nil : proxySettings?.effectiveActiveServer
+             let initialWebProxyConfiguration = initialActiveServer?.webProxyConfiguration
+             WebProxyTransport.shared.apply(configuration: isAppExtension ? nil : initialWebProxyConfiguration)
+             if initialActiveServer?.isWebProxy == true {
+@@ -634,7 +638,7 @@
+             context.keychain = keychain
+             var wrappedAdditionalSource: MTSignal?
+             #if os(iOS)
+-            if #available(iOS 10.0, *), !supplementary, arguments.isICloudEnabled {
++            if #available(iOS 10.0, *), !supplementary, !DraftPocketDemo.isEnabled, arguments.isICloudEnabled {
+                 var cloudDataContextValue: CloudDataContext?
+                 if let value = cloudDataContext.with({ $0 }) {
+                     cloudDataContextValue = value
+@@ -658,7 +662,7 @@
+             }
+             #endif
+             
+-            if !supplementary {
++            if !supplementary && !DraftPocketDemo.isEnabled {
+                 context.setDiscoverBackupAddressListSignal(MTBackupAddressSignals.fetchBackupIps(testingEnvironment, currentContext: context, additionalSource: wrappedAdditionalSource, phoneNumber: phoneNumber, mainDatacenterId: datacenterId))
+                 let externalRequestVerificationStream = arguments.externalRequestVerificationStream
+                 context.setExternalRequestVerification({ nonce in
+@@ -1178,6 +1182,8 @@
+     }
+ 
+     func updateProxySettings(_ activeServer: ProxyServerSettings?) {
++        // The isolated fixture cannot switch to a real proxy or a WEB transport.
++        if DraftPocketDemo.isEnabled { return }
+         let webConfiguration = activeServer?.webProxyConfiguration
+         WebProxyTransport.shared.apply(configuration: self.isAppExtension ? nil : webConfiguration)
+         self.webProxyActive.set(activeServer?.isWebProxy == true)
+@@ -1253,6 +1259,7 @@
+ 
+     @discardableResult
+     public func switchEngine(to kind: NetworkEngineKind, reason: String) -> Bool {
++        if DraftPocketDemo.isEnabled { return false }
+         guard let switchingEngine = self.switchingEngine else {
+             return kind == self.engine.kind
+         }
+diff --git a/submodules/TelegramUI/Sources/AppDelegate.swift b/submodules/TelegramUI/Sources/AppDelegate.swift
+--- a/submodules/TelegramUI/Sources/AppDelegate.swift
++++ b/submodules/TelegramUI/Sources/AppDelegate.swift
+@@ -243,6 +243,8 @@
+ 
+ @objc(AppDelegate) class AppDelegate: UIResponder, UIApplicationDelegate, PKPushRegistryDelegate, UNUserNotificationCenterDelegate, URLSessionDelegate, URLSessionTaskDelegate {
+     @objc var window: UIWindow?
++    private let draftPocketDemoBootstrap = MetaDisposable()
++    private var draftPocketDemoDidOpen = false
+     var nativeWindow: (UIWindow & WindowHost)?
+     var mainWindow: Window1!
+     private var statusBarHost: ApplicationStatusBarHost?
+@@ -351,6 +353,8 @@
+     private var recaptchaClientsBySiteKey: [String: Promise<RecaptchaClient>] = [:]
+         
+     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
++        DraftPocketDemo.recordLaunchPhase(.launchEntered)
++        defer { DraftPocketDemo.recordLaunchPhase(.launchReturned) }
+         precondition(!testIsLaunched)
+         testIsLaunched = true
+         CrashReportCollector.shared.start()
+@@ -451,7 +455,9 @@
+         self.window = window
+         self.nativeWindow = window
+         
++        DraftPocketDemo.recordLaunchPhase(.metalInitializing)
+         hostView.containerView.layer.addSublayer(MetalEngine.shared.rootLayer)
++        DraftPocketDemo.recordLaunchPhase(.metalReady)
+         // On the first start after an update, compile the pipelines that would otherwise stall their first use.
+         if MetalEngine.shared.pipelineCache.isFresh {
+             prewarmLiquidGlassShapes([.crest], qos: .utility)
+@@ -573,9 +579,13 @@
+         try! PasscodeEnvironment.shared.configure(PasscodeConfiguration(appGroupIdentifier: appGroupName, processRole: .mainApp, biometricKeychainService: walletBiometricKeychainService), privateAccessGroup: {
+             BuildConfig.keychainAccessGroup(baseAppBundleId: baseAppBundleId)
+         })
++        DraftPocketDemo.recordLaunchPhase(.passcodeConfigured)
+         let maybeAppGroupUrl = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupName)
+-        
++        DraftPocketDemo.recordLaunchPhase(maybeAppGroupUrl == nil ? .appGroupMissing : .appGroupResolved)
++
++        DraftPocketDemo.recordLaunchPhase(.buildConfigStarted)
+         let buildConfig = BuildConfig(baseAppBundleId: baseAppBundleId)
++        DraftPocketDemo.recordLaunchPhase(.buildConfigReady)
+         self.buildConfig = buildConfig
+         let signatureDict = BuildConfigExtra.signatureDict()
+         
+@@ -717,19 +727,24 @@
+         }
+         
+         let isUITest = CommandLine.arguments.contains("--ui-test")
++        let draftPocketDemoBasePath = DraftPocketDemo.isEnabled ? DraftPocketDemo.basePath(appGroupPath: appGroupUrl.path) : nil
++        if DraftPocketDemo.isEnabled, let marker = DraftPocketDemo.buildMarker { print(marker) }
+ 
+         let rootPath: String
+         if isUITest {
+             let testDataPath = appGroupUrl.path + "/telegram-ui-tests-data"
+             let _ = try? FileManager.default.removeItem(atPath: testDataPath)
+             rootPath = rootPathForBasePath(testDataPath)
++        } else if let draftPocketDemoBasePath {
++            rootPath = rootPathForBasePath(draftPocketDemoBasePath)
+         } else {
+             rootPath = rootPathForBasePath(appGroupUrl.path)
+         }
+-        if !isUITest {
++        if !isUITest && !DraftPocketDemo.isEnabled {
+             performAppGroupUpgrades(appGroupPath: appGroupUrl.path, rootPath: rootPath)
+         }
+         
++        DraftPocketDemo.recordLaunchPhase(.isolatedRootSelected)
+         let deviceSpecificEncryptionParameters = BuildConfig.deviceSpecificEncryptionParameters(rootPath, baseAppBundleId: baseAppBundleId)
+         let encryptionParameters = ValueBoxEncryptionParameters(forceEncryptionIfNoSet: false, key: ValueBoxEncryptionParameters.Key(data: deviceSpecificEncryptionParameters.key)!, salt: ValueBoxEncryptionParameters.Salt(data: deviceSpecificEncryptionParameters.salt)!)
+         
+@@ -759,6 +774,7 @@
+             writeAbilityTestSuccess = false
+         }
+         
++        DraftPocketDemo.recordLaunchPhase(writeAbilityTestSuccess ? .writeCheckPassed : .writeCheckFailed)
+         if !writeAbilityTestSuccess {
+             let alertController = UIAlertController(title: nil, message: "The device does not have sufficient free space.", preferredStyle: .alert)
+             alertController.addAction(UIAlertAction(title: "OK", style: .default, handler: { _ in
+@@ -1063,9 +1079,10 @@
+         })
+         
+         let accountManager: AccountManager<TelegramAccountManagerTypes> = setupAccountManager(basePath: rootPath + "/accounts-metadata", isTemporary: false, isReadOnly: false, useCaches: true, removeDatabaseOnError: true, resetLocalSecrets: {
+-            try resetWalletLocalSecrets()
++            if !DraftPocketDemo.isEnabled { try resetWalletLocalSecrets() }
+         })
+         self.accountManager = accountManager
++        DraftPocketDemo.recordLaunchPhase(.accountManagerReady)
+ 
+         telegramUIDeclareEncodables()
+         initializeAccountManagement()
+@@ -1105,12 +1122,12 @@
+             return true
+         }
+ 
+-        let pushRegistry = PKPushRegistry(queue: .main)
+-        if #available(iOS 9.0, *) {
+-            pushRegistry.desiredPushTypes = Set([.voIP])
+-        }
+-        self.pushRegistry = pushRegistry
+-        pushRegistry.delegate = self
++        if !DraftPocketDemo.isEnabled {
++            let pushRegistry = PKPushRegistry(queue: .main)
++            if #available(iOS 9.0, *) { pushRegistry.desiredPushTypes = Set([.voIP]) }
++            self.pushRegistry = pushRegistry
++            pushRegistry.delegate = self
++        }
+ 
+         self.accountManagerState = extractAccountManagerState(records: accountManager._internalAccountRecordsSync())
+         let _ = (accountManager.accountRecords()
+@@ -1133,7 +1150,7 @@
+         |> mapToSignal { [self] accountManager, initialPresentationDataAndSettings -> Signal<(SharedApplicationContext, LoggingSettings), NoError> in
+             self.mainWindow?.hostView.containerView.backgroundColor =  initialPresentationDataAndSettings.presentationData.theme.chatList.backgroundColor
+             
+-            let legacyBasePath = appGroupUrl.path
++            let legacyBasePath = draftPocketDemoBasePath ?? appGroupUrl.path
+             
+             let presentationDataPromise = Promise<PresentationData>()
+             let appLockContext = AppLockContextImpl(rootPath: rootPath, window: self.mainWindow!, rootController: self.window?.rootViewController, applicationBindings: applicationBindings, accountManager: accountManager, presentationDataSignal: presentationDataPromise.get(), lockIconInitialFrame: {
+@@ -1161,7 +1178,7 @@
+                         self.mainWindow.coveringView = nil
+                     }
+                 }
+-            }, appDelegate: self, testingEnvironment: isUITest)
++            }, appDelegate: self, testingEnvironment: isUITest || DraftPocketDemo.isEnabled)
+             navigationBarOverflowMenuPresenter = { [weak sharedContext] sourceView, items in
+                 guard let sharedContext, let mainWindow = sharedContext.mainWindow else {
+                     return
+@@ -1270,6 +1287,7 @@
+                 return sharedContext.currentPresentationData.with({ $0 })
+             })
+             let sharedApplicationContext = SharedApplicationContext(sharedContext: sharedContext, notificationManager: notificationManager, wakeupManager: wakeupManager)
++            DraftPocketDemo.recordLaunchPhase(.sharedContextReady)
+             sharedApplicationContext.sharedContext.mediaManager.overlayMediaManager.attachOverlayMediaController(sharedApplicationContext.overlayMediaController)
+             
+             return accountManager.transaction { transaction -> (SharedApplicationContext, LoggingSettings) in
+@@ -1383,6 +1401,11 @@
+             }
+             |> deliverOnMainQueue
+             |> map { accountAndSettings -> UnauthorizedApplicationContext? in
++                if DraftPocketDemo.isEnabled, let (account, _) = accountAndSettings {
++                    DraftPocketDemo.recordLaunchPhase(.unauthorizedAccountReady)
++                    self.draftPocketDemoBootstrap.set(DraftPocketDemo.signIn(accountManager: sharedApplicationContext.sharedContext.accountManager, account: account).start())
++                    return nil
++                }
+                 return accountAndSettings.flatMap { account, otherAccountPhoneNumbers in
+                     return UnauthorizedApplicationContext(apiId: buildConfig.apiId, apiHash: buildConfig.apiHash, sharedContext: sharedApplicationContext.sharedContext, account: account, otherAccountPhoneNumbers: otherAccountPhoneNumbers)
+                 }
+@@ -1412,6 +1435,7 @@
+             self.crashReportPromptDisposable.set(nil)
+             self.contextValue = context
+             if let context = context {
++                DraftPocketDemo.recordLaunchPhase(.authorizedContextCreated)
+                 setupLegacyComponents(context: context.context)
+                 let isReady = context.isReady.get()
+                 contextReadyDisposable.set((isReady
+@@ -1425,7 +1449,13 @@
+                     print("Launch to ready took \((CFAbsoluteTimeGetCurrent() - launchStartTime) * 1000.0) ms")
+ 
+                     self.mainWindow.debugAction = nil
++                    DraftPocketDemo.recordLaunchPhase(.authorizedContextReady)
+                     self.mainWindow.viewController = context.rootController
++                    if DraftPocketDemo.isEnabled && !self.draftPocketDemoDidOpen {
++                        self.draftPocketDemoDidOpen = true
++                        DraftPocketDemo.recordLaunchPhase(.chatRouteRequested)
++                        self.openChatWhenReady(accountId: context.context.account.id, peerId: DraftPocketDemo.launchPeerId, threadId: nil, activateInput: true, storyId: nil)
++                    }
+                     
+                     if firstTime {
+                         let layer = context.rootController.view.layer
+@@ -1684,11 +1714,10 @@
+             })
+         }
+         
+-        if #available(iOS 12.0, *) {
+-            UIApplication.shared.registerForRemoteNotifications()
+-        }
+-        
+-        let _ = self.urlSession(identifier: "\(baseAppBundleId).backroundSession")
++        if !DraftPocketDemo.isEnabled {
++            if #available(iOS 12.0, *) { UIApplication.shared.registerForRemoteNotifications() }
++            let _ = self.urlSession(identifier: "\(baseAppBundleId).backroundSession")
++        }
+         
+         var previousReportedMemoryConsumption = 0
+         let _ = Foundation.Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true, block: { _ in
+@@ -3135,6 +3164,7 @@
+     }
+     
+     func requestNotificationTokenInvalidation() {
++        if DraftPocketDemo.isEnabled { return }
+         UIApplication.shared.unregisterForRemoteNotifications()
+         DispatchQueue.main.asyncAfter(deadline: DispatchTime.now() + 1.0, execute: {
+             UIApplication.shared.registerForRemoteNotifications()
+@@ -3142,6 +3172,7 @@
+     }
+     
+     private func registerForNotifications(context: AccountContextImpl, authorize: Bool = true, completion: @escaping (Bool) -> Void = { _ in }) {
++        if DraftPocketDemo.isEnabled { completion(false); return }
+         let presentationData = context.sharedContext.currentPresentationData.with { $0 }
+         let _ = (context.sharedContext.accountManager.transaction { transaction -> Bool in
+             let settings = transaction.getSharedData(ApplicationSpecificSharedDataKeys.inAppNotificationSettings)?.get(InAppNotificationSettings.self) ?? InAppNotificationSettings.defaultSettings
+diff --git a/submodules/UndoUI/Sources/UndoOverlayControllerNode.swift b/submodules/UndoUI/Sources/UndoOverlayControllerNode.swift
+--- a/submodules/UndoUI/Sources/UndoOverlayControllerNode.swift
++++ b/submodules/UndoUI/Sources/UndoOverlayControllerNode.swift
+@@ -1577,6 +1577,10 @@
+         self.undoButtonTextNode.attributedText = NSAttributedString(string: undoText, font: Font.regular(17.0), textColor: undoTextColor)
+         
+         self.undoButtonNode = HighlightTrackingButtonNode()
++        self.undoButtonNode.isAccessibilityElement = true
++        self.undoButtonNode.accessibilityLabel = undoText
++        self.undoButtonNode.accessibilityTraits = [.button]
++        self.undoButtonNode.accessibilityIdentifier = "DraftPocketDemo.Undo"
+         
+         self.panelNode = ASDisplayNode()
+         if presentationData.theme.overallDarkAppearance && !(self.appearance?.isBlurred == true) {
+diff --git a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
+--- a/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatTextInputPanelNode/Sources/ChatTextInputPanelNode.swift
+@@ -1061,6 +1061,7 @@
+         }
+         
+         self.sendActionButtons.sendButton.addTarget(self, action: #selector(self.sendButtonPressed), forControlEvents: .touchUpInside)
++        self.sendActionButtons.accessibilityIdentifier = "DraftPocketDemo.Send"
+         self.sendActionButtons.sendContainerNode.alpha = 0.0
+         self.sendActionButtons.updateAccessibility()
+         self.mediaActionButtons.updateAccessibility()
+diff --git a/submodules/TelegramUI/Sources/ChatController.swift b/submodules/TelegramUI/Sources/ChatController.swift
+--- a/submodules/TelegramUI/Sources/ChatController.swift
++++ b/submodules/TelegramUI/Sources/ChatController.swift
+@@ -8568,6 +8568,9 @@
+             f,
+             completion: completion
+         )
++        if DraftPocketDemo.isEnabled {
++            DraftPocketDemo.observeComposer(account: self.context.account, peerId: self.chatLocation.peerId, content: self.presentationInterfaceState.interfaceState.composeInputState.content)
++        }
+     }
+     
+     func updateItemNodesSelectionStates(animated: Bool) {
+diff --git a/submodules/TelegramUI/Sources/DraftPocketController.swift b/submodules/TelegramUI/Sources/DraftPocketController.swift
+--- a/submodules/TelegramUI/Sources/DraftPocketController.swift
++++ b/submodules/TelegramUI/Sources/DraftPocketController.swift
+@@ -142,11 +142,20 @@
+         self.emptyLabel.frame = CGRect(x: inset, y: tableTop + 40.0, width: width, height: self.emptyLabel.sizeThatFits(CGSize(width: width, height: 1000.0)).height)
+     }
+ 
+-    @objc private func putAsidePressed() { if !self.busy { self.putAside?() } }
++    @objc private func putAsidePressed() {
++        DraftPocketDemo.recordLaunchPhase(.pocketPutAsidePressed)
++        if !self.busy {
++            DraftPocketDemo.recordLaunchPhase(self.putAside == nil ? .pocketPutAsideCallbackMissing : .pocketPutAsideCallbackInvoked)
++            self.putAside?()
++        } else {
++            DraftPocketDemo.recordLaunchPhase(.pocketPutAsideBusy)
++        }
++    }
+     @objc private func closePressed() { self.dismiss() }
+ 
+     override func viewDidDisappear(_ animated: Bool) {
+         super.viewDidDisappear(animated)
++        DraftPocketDemo.recordLaunchPhase(.pocketSheetDisappeared)
+         self.closed?()
+     }
+ 
+diff --git a/submodules/TelegramUI/Sources/ChatControllerDraftPocket.swift b/submodules/TelegramUI/Sources/ChatControllerDraftPocket.swift
+--- a/submodules/TelegramUI/Sources/ChatControllerDraftPocket.swift
++++ b/submodules/TelegramUI/Sources/ChatControllerDraftPocket.swift
+@@ -139,29 +139,39 @@
+     }
+ 
+     private func transferDraftPocket(restoring id: String?, activeChecked: Bool = false, replyChecked: Bool = false, replyAvailable: Bool = true) {
++        if !activeChecked { DraftPocketDemo.recordLaunchPhase(id == nil ? .pocketPutAsideRequested : .pocketRestoreRequested) }
+         guard !self.draftPocketOperationInProgress, self.draftPocketSupported,
+               let peerId = self.chatLocation.peerId, let view = self.draftPocketView,
+               view.error == nil, self.draftPocketHasActiveToken else {
++            DraftPocketDemo.recordLaunchPhase(.pocketTransferRefused)
+             self.draftPocketNotice(self.draftPocketUnsupportedNotice)
+             return
+         }
+         guard self.draftPocketHasWritableComposer, let panel = self.chatDisplayNode.textInputPanelNode else {
++            DraftPocketDemo.recordLaunchPhase(.pocketWritingRefused)
+             self.draftPocketNotice(DraftPocketStrings(self.presentationData.strings).writingUnavailable)
+             return
+         }
+         guard !panel.draftPocketHasMarkedText else {
++            DraftPocketDemo.recordLaunchPhase(.pocketMarkedTextRefused)
+             self.draftPocketNotice(DraftPocketStrings(self.presentationData.strings).unsupported)
+             return
+         }
+         if !activeChecked {
++            DraftPocketDemo.recordLaunchPhase(.pocketActiveCheckStarted)
+             let threadId = self.chatLocation.threadId
+             let scope = self.draftPocketScope.token
+             let _ = (self.context.engine.peers.getOpaqueChatInterfaceState(peerId: peerId, threadId: threadId)
+             |> deliverOnMainQueue).startStandalone(next: { [weak self] stored in
++                DraftPocketDemo.recordLaunchPhase(.pocketActiveCheckReturned)
+                 guard let self, self.draftPocketScope.matches(scope),
+-                      !self.draftPocketOperationInProgress else { return }
++                      !self.draftPocketOperationInProgress else {
++                    DraftPocketDemo.recordLaunchPhase(.pocketActiveCheckScopeRefused)
++                    return
++                }
+                 let token: Data?
+                 do { token = try stored.map(draftPocketActiveStateToken) } catch {
++                    DraftPocketDemo.recordLaunchPhase(.pocketActiveCheckEncodingFailed)
+                     self.draftPocketNotice(DraftPocketStrings(self.presentationData.strings).failed)
+                     return
+                 }
+@@ -175,11 +185,13 @@
+                           current.replyMessageSubject == persisted.replyMessageSubject,
+                           current.composeDisableUrlPreviews == persisted.composeDisableUrlPreviews,
+                           current.sendMessageEffect == persisted.sendMessageEffect else {
++                        DraftPocketDemo.recordLaunchPhase(.pocketActiveDraftChanged)
+                         self.draftPocketNotice(DraftPocketStrings(self.presentationData.strings).changed)
+                         return
+                     }
+                     self.draftPocketExpectedActiveToken = token
+                 }
++                DraftPocketDemo.recordLaunchPhase(.pocketActiveCheckAccepted)
+                 self.transferDraftPocket(restoring: id, activeChecked: true, replyChecked: replyChecked, replyAvailable: replyAvailable)
+             })
+             return
+@@ -201,6 +213,7 @@
+             .withUpdatedComposeInputState(liveInput)
+             .withUpdatedInputLanguage(panel.effectiveInputLanguage)
+             .withUpdatedTimestamp(Int32(Date().timeIntervalSince1970))
++        DraftPocketDemo.recordLaunchPhase(.pocketSnapshotStarted)
+         let nextState: ChatInterfaceState
+         let operation: DraftPocketOperation
+         do {
+@@ -211,8 +224,12 @@
+                 current = nil
+             }
+             if let id {
+-                guard let item = view.items.first(where: { $0.id == id }) else { return }
++                guard let item = view.items.first(where: { $0.id == id }) else {
++                    DraftPocketDemo.recordLaunchPhase(.pocketRestoreItemMissing)
++                    return
++                }
+                 guard panel.richTextInputNode?.canRestoreInputSelection(item.snapshot.selection, in: item.snapshot.resolvedContent) != false else {
++                    DraftPocketDemo.recordLaunchPhase(.pocketRestoreSelectionRefused)
+                     self.draftPocketNotice(DraftPocketStrings(self.presentationData.strings).unsupported)
+                     return
+                 }
+@@ -229,7 +246,10 @@
+                     .withUpdatedSendMessageEffect(restored.sendMessageEffect)
+                 operation = .restore(id: id, current: current, restoredState: try self.draftPocketOpaqueState(nextState))
+             } else {
+-                guard let current else { return }
++                guard let current else {
++                    DraftPocketDemo.recordLaunchPhase(.pocketEmptyRefused)
++                    return
++                }
+                 nextState = captured.withUpdatedComposeInputState(ChatTextInputState())
+                     .withUpdatedReplyMessageSubject(nil)
+                     .withUpdatedComposeDisableUrlPreviews([])
+@@ -237,26 +257,42 @@
+                 operation = .putAside(snapshot: current, clearedState: try self.draftPocketOpaqueState(nextState))
+             }
+         } catch {
++            DraftPocketDemo.recordLaunchPhase(.pocketSnapshotFailed)
+             self.draftPocketNotice(DraftPocketStrings(self.presentationData.strings).failed)
+             return
+         }
++        DraftPocketDemo.recordLaunchPhase(.pocketSnapshotReady)
+         guard let participants = DraftPocketControllerRegistry.lock(self, captured: captured, restoring: nextState.composeInputState) else {
++            DraftPocketDemo.recordLaunchPhase(.pocketRegistryRefused)
+             self.draftPocketNotice(DraftPocketStrings(self.presentationData.strings).changed)
+             return
+         }
++        DraftPocketDemo.recordLaunchPhase(.pocketRegistryAccepted)
+         panel.prepareDraftPocketTransfer()
+         self.updateDraftPocketPresentation()
+         // Keep the account/store alive until its transaction finishes, even if the controller leaves.
++        DraftPocketDemo.recordLaunchPhase(.pocketStoreStarted)
+         let _ = (self.context.engine.peers.updateDraftPocket(peerId: peerId, threadId: threadId, expectedRevision: view.revision, expectedActiveState: self.draftPocketExpectedActiveToken, operation: operation)
+         |> deliverOnMainQueue).startStandalone(next: { [weak self, weak panel] result in
+             switch result {
+             case let .failure(error):
++                switch error {
++                case .conflict: DraftPocketDemo.recordLaunchPhase(.pocketStoreConflict)
++                case .full: DraftPocketDemo.recordLaunchPhase(.pocketStoreFull)
++                case .itemNotFound: DraftPocketDemo.recordLaunchPhase(.pocketStoreItemNotFound)
++                case .empty: DraftPocketDemo.recordLaunchPhase(.pocketStoreEmpty)
++                case .unsupportedContext: DraftPocketDemo.recordLaunchPhase(.pocketStoreUnsupportedContext)
++                case .mediaRetentionUnavailable: DraftPocketDemo.recordLaunchPhase(.pocketStoreMediaRetentionUnavailable)
++                case .corruptStorage: DraftPocketDemo.recordLaunchPhase(.pocketStoreCorruptStorage)
++                case .encodingFailed: DraftPocketDemo.recordLaunchPhase(.pocketStoreEncodingFailed)
++                }
+                 if let self, self.draftPocketScope.matches(scope) {
+                     panel?.cancelDraftPocketTransfer()
+                     self.draftPocketReport(error)
+                 }
+                 DraftPocketControllerRegistry.unlock(participants)
+             case let .success(updatedView):
++                DraftPocketDemo.recordLaunchPhase(.pocketStoreSuccess)
+                 // Apply only to participants from the captured visit. A stale result
+                 // must never replace a subsequently loaded composer or pocket view.
+                 for locked in participants where locked.isCurrent {
+@@ -281,8 +317,12 @@
+                         nextState.composeInputState.content, selection: nextState.composeInputState.selection)
+                 }
+                 DraftPocketControllerRegistry.unlock(participants)
+-                guard let self, self.draftPocketScope.matches(scope) else { return }
++                guard let self, self.draftPocketScope.matches(scope) else {
++                    DraftPocketDemo.recordLaunchPhase(.pocketSuccessScopeRefused)
++                    return
++                }
+                 let animateTransfer = { [weak self, weak panel] in
++                    DraftPocketDemo.recordLaunchPhase(.pocketDismissCompletion)
+                     guard let self, self.draftPocketScope.matches(scope) else { return }
+                     guard self.traceVisibility() else {
+                         panel?.cancelDraftPocketTransfer()
+@@ -298,8 +338,10 @@
+                     if !replyAvailable { self.draftPocketNotice(DraftPocketStrings(self.presentationData.strings).unavailableReply) }
+                 }
+                 if let controller = self.draftPocketController {
++                    DraftPocketDemo.recordLaunchPhase(.pocketDismissRequested)
+                     controller.dismiss(completion: animateTransfer)
+                 } else {
++                    DraftPocketDemo.recordLaunchPhase(.pocketDismissNotNeeded)
+                     animateTransfer()
+                 }
+             }

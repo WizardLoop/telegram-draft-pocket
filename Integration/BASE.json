@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "upstream_url": "https://github.com/TelegramMessenger/Telegram-iOS.git",
+  "commit": "279f89e4d4f63f17227bf877dc3d8990f22ecd58",
+  "verified_on": "2026-11-04",
+  "versions": {
+    "app": "13.1.2",
+    "xcode": "27.1",
+    "deploy_xcode": "27.1",
+    "bazel": "9.2.0:dd466352a3e4d3581b8898740ee1ff208866ccbe25f8d367c5dcb950219587e6",
+    "macos": "27"
+  },
+  "native_test_simulator": {
+    "device_type": "iPhone 17",
+    "os_version": "27.0"
+  },
+  "native_test_targets": [
+    "//submodules/TelegramCore:DraftPocketTests",
+    "//submodules/ChatInterfaceState:DraftPocketComposerTests",
+    {
+      "target": "//Tests/ComposerHarness:DraftPocketSelectionHarnessTests",
+      "filter": "HarnessDraftPocketSelectionTests"
+    },
+    {
+      "target": "//submodules/TelegramUI/Components/Chat/ChatRichTextEditorComposer:DraftPocketSelectionBridgeTests",
+      "filter": "DocumentSelectionBridgeTests"
+    },
+    {
+      "target": "//submodules/Postbox:DraftMediaRetentionTests",
+      "filter": "MediaBoxDraftRetentionTests"
+    }
+  ]
+}
